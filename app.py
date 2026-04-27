@@ -992,107 +992,112 @@ def _render_progress_tab() -> None:
         st.info("No saved analyses for this practice session yet. Run an analysis and click Save Analysis.")
 
 
-_initialize_state()
-inject_global_styles()
+def main() -> None:
+    _initialize_state()
+    inject_global_styles()
 
-with st.sidebar:
-    st.title(APP_NAME)
-    st.caption("Controls")
-    st.selectbox(
-        "Practice session",
-        ["Arrays", "Strings", "Hashmaps", "Dynamic Programming", "Graphs", "Pandas/Numpy", "General"],
-        key="practice_session",
-    )
-    example_name = st.selectbox("Example template", list(EXAMPLES.keys()))
-    load_col, reset_col = st.columns(2)
-    with load_col:
-        if st.button("Load Example", width="stretch"):
-            example = get_example(example_name)
-            st.session_state.editor_code = example["code"]
-            st.session_state.benchmark_input = example["input"]
-            st.session_state.entrypoint = example["entrypoint"]
-            _clear_outputs()
-            _rerun()
-    with reset_col:
-        if st.button("Reset", width="stretch"):
-            st.session_state.editor_code = DEFAULT_CODE
-            st.session_state.benchmark_input = DEFAULT_INPUT
-            st.session_state.entrypoint = "two_sum"
-            st.session_state.benchmark_history = []
-            _clear_outputs()
-            _rerun()
-
-    st.divider()
-    st.checkbox(
-        "Static-only public mode",
-        key="static_only_mode",
-        help="Disable code execution for public demos or untrusted snippets.",
-    )
-    st.checkbox(
-        "Allow top-level script benchmarking",
-        key="allow_top_level_benchmark",
-        value=False,
-        help="Off by default. Prefer benchmarking a named function entrypoint.",
-    )
-    st.checkbox(
-        "Use Docker isolation if available",
-        key="docker_backend",
-        help="Optional local/pro deployment mode. Streamlit Community Cloud usually does not provide Docker.",
-    )
-    if st.session_state.docker_backend:
-        st.caption("Docker available: " + ("yes" if docker_available() else "no"))
-    st.selectbox("Benchmark profile", ["Quick", "Balanced", "Stress"], index=1, key="benchmark_profile")
-    entrypoint_options = _sync_entrypoint_with_code()
-    if entrypoint_options:
-        current_entrypoint = st.session_state.entrypoint
+    with st.sidebar:
+        st.title(APP_NAME)
+        st.caption("Controls")
         st.selectbox(
-            "Entrypoint function",
-            entrypoint_options,
-            index=entrypoint_options.index(current_entrypoint) if current_entrypoint in entrypoint_options else 0,
-            key="entrypoint",
-            help="Auto-detected from the pasted code. Class methods are shown as ClassName.method.",
+            "Practice session",
+            ["Arrays", "Strings", "Hashmaps", "Dynamic Programming", "Graphs", "Pandas/Numpy", "General"],
+            key="practice_session",
         )
-        st.caption("Auto-detected callable entrypoints: " + ", ".join(entrypoint_options))
-    else:
-        st.text_input(
-            "Entrypoint function",
-            key="entrypoint",
-            help="No functions were detected. Leave blank to benchmark top-level script execution.",
+        example_name = st.selectbox("Example template", list(EXAMPLES.keys()))
+        load_col, reset_col = st.columns(2)
+        with load_col:
+            if st.button("Load Example", width="stretch"):
+                example = get_example(example_name)
+                st.session_state.editor_code = example["code"]
+                st.session_state.benchmark_input = example["input"]
+                st.session_state.entrypoint = example["entrypoint"]
+                _clear_outputs()
+                _rerun()
+        with reset_col:
+            if st.button("Reset", width="stretch"):
+                st.session_state.editor_code = DEFAULT_CODE
+                st.session_state.benchmark_input = DEFAULT_INPUT
+                st.session_state.entrypoint = "two_sum"
+                st.session_state.benchmark_history = []
+                _clear_outputs()
+                _rerun()
+
+        st.divider()
+        st.checkbox(
+            "Static-only public mode",
+            key="static_only_mode",
+            help="Disable code execution for public demos or untrusted snippets.",
         )
-    st.text_area(
-        "Benchmark input",
-        key="benchmark_input",
-        height=140,
-        help='Use JSON/Python literal, {"args": [...], "kwargs": {...}}, or simple assignments like arr = [1, 2, 3].',
-    )
-    st.slider("Benchmark repeats", min_value=1, max_value=30, value=DEFAULT_REPEAT_COUNT, key="repeat_count")
-    st.slider(
-        "Timeout seconds",
-        min_value=1.0,
-        max_value=20.0,
-        value=DEFAULT_TIMEOUT_SECONDS,
-        step=0.5,
-        key="timeout_seconds",
-    )
-    st.selectbox("Scaling input shape", ["list", "string", "matrix", "dict", "graph"], key="scaling_shape")
-    st.text_input("Scaling sizes", value="10,100,500", key="scaling_sizes")
-    st.select_slider("Input-size mindset", options=["Tiny", "Small", "Medium", "Large", "Stress"], value="Small")
-    gemini_api_key = st.text_input(
-        "Gemini API key (optional)",
-        key=_gemini_key_widget_key(),
-        type="password",
-        help=(
-            "Used only for the current Streamlit request to enhance feedback and the Algorithm Planner. "
-            "It is not saved to history or reports."
-        ),
-    )
-    st.session_state.gemini_api_key = gemini_api_key
-    st.caption("Execution protections are best-effort and intended for interview-prep snippets.")
+        st.checkbox(
+            "Allow top-level script benchmarking",
+            key="allow_top_level_benchmark",
+            value=False,
+            help="Off by default. Prefer benchmarking a named function entrypoint.",
+        )
+        st.checkbox(
+            "Use Docker isolation if available",
+            key="docker_backend",
+            help="Optional local/pro deployment mode. Streamlit Community Cloud usually does not provide Docker.",
+        )
+        if st.session_state.docker_backend:
+            st.caption("Docker available: " + ("yes" if docker_available() else "no"))
+        st.selectbox("Benchmark profile", ["Quick", "Balanced", "Stress"], index=1, key="benchmark_profile")
+        entrypoint_options = _sync_entrypoint_with_code()
+        if entrypoint_options:
+            current_entrypoint = st.session_state.entrypoint
+            st.selectbox(
+                "Entrypoint function",
+                entrypoint_options,
+                index=entrypoint_options.index(current_entrypoint) if current_entrypoint in entrypoint_options else 0,
+                key="entrypoint",
+                help="Auto-detected from the pasted code. Class methods are shown as ClassName.method.",
+            )
+            st.caption("Auto-detected callable entrypoints: " + ", ".join(entrypoint_options))
+        else:
+            st.text_input(
+                "Entrypoint function",
+                key="entrypoint",
+                help="No functions were detected. Leave blank to benchmark top-level script execution.",
+            )
+        st.text_area(
+            "Benchmark input",
+            key="benchmark_input",
+            height=140,
+            help='Use JSON/Python literal, {"args": [...], "kwargs": {...}}, or simple assignments like arr = [1, 2, 3].',
+        )
+        st.slider("Benchmark repeats", min_value=1, max_value=30, value=DEFAULT_REPEAT_COUNT, key="repeat_count")
+        st.slider(
+            "Timeout seconds",
+            min_value=1.0,
+            max_value=20.0,
+            value=DEFAULT_TIMEOUT_SECONDS,
+            step=0.5,
+            key="timeout_seconds",
+        )
+        st.selectbox("Scaling input shape", ["list", "string", "matrix", "dict", "graph"], key="scaling_shape")
+        st.text_input("Scaling sizes", value="10,100,500", key="scaling_sizes")
+        st.select_slider("Input-size mindset", options=["Tiny", "Small", "Medium", "Large", "Stress"], value="Small")
+        gemini_api_key = st.text_input(
+            "Gemini API key (optional)",
+            key=_gemini_key_widget_key(),
+            type="password",
+            help=(
+                "Used only for the current Streamlit request to enhance feedback and the Algorithm Planner. "
+                "It is not saved to history or reports."
+            ),
+        )
+        st.session_state.gemini_api_key = gemini_api_key
+        st.caption("Execution protections are best-effort and intended for interview-prep snippets.")
 
-_render_hero()
+    _render_hero()
 
-workflow_tabs = st.tabs(["Algorithm Planner", "Code Analyzer"])
-with workflow_tabs[0]:
-    _render_algorithm_planner_tab()
-with workflow_tabs[1]:
-    _render_code_analyzer_workflow(gemini_api_key)
+    workflow_tabs = st.tabs(["Algorithm Planner", "Code Analyzer"])
+    with workflow_tabs[0]:
+        _render_algorithm_planner_tab()
+    with workflow_tabs[1]:
+        _render_code_analyzer_workflow(gemini_api_key)
+
+
+if __name__ == "__main__":
+    main()

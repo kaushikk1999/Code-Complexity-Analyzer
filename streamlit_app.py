@@ -1,3 +1,5 @@
 """Streamlit Community Cloud entrypoint."""
 
-import app
+from app import main
+
+main()
