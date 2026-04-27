@@ -1,0 +1,7 @@
+streamlit>=1.32
+plotly>=5.18
+google-genai>=1.0
+radon>=6.0
+pytest>=7.4
+ruff>=0.5
+mypy>=1.8
