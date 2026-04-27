@@ -245,7 +245,12 @@ Required JSON shape:
 Rules:
 - Preserve the configured entrypoint function name exactly: {entrypoint!r}.
 - Keep the function callable with the same benchmark input shape.
-- Prefer lower estimated time complexity; memory may increase only when it buys a clear runtime improvement.
+- Generate the best practical version of the code.
+- Prefer the lowest possible time complexity.
+- If the current code is already asymptotically optimal, still return a cleaner, simpler, edge-case-safe reference implementation with the same function name.
+- Prefer the lowest possible auxiliary space only when it does not worsen time complexity.
+- Use data structures when they reduce asymptotic time or simplify correctness.
+- Add edge-case handling when it does not change the required return contract.
 - Do not import filesystem, process, network, introspection, or dynamic execution modules.
 - Do not call open, eval, exec, compile, input, getattr, setattr, globals, locals, or __import__.
 - If previous rejection reasons are listed, correct them.

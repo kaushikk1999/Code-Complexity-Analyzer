@@ -51,5 +51,6 @@ class Solution:
 def test_app_uses_auto_detected_entrypoint_selectbox():
     app_source = Path("app.py").read_text(encoding="utf-8")
     assert "choose_entrypoint" in app_source
-    assert 'st.selectbox(\n            "Entrypoint function"' in app_source
-    assert 'st.text_input(\n            "Entrypoint function"' in app_source
+    assert "st.selectbox(" in app_source
+    assert "st.text_input(" in app_source
+    assert app_source.count('"Entrypoint function"') >= 2

@@ -673,7 +673,10 @@ def _render_optimization_tab(
             st.caption(f"Safe rewrite confidence: {int(plan.safe_rewrite_confidence * 100)}%")
             st.code(plan.optimized_code, language="python")
         else:
-            st.info("No verified better rewrite was found. The original code is kept because generated candidates did not pass validation.")
+            st.info(
+                "No asymptotically better rewrite was found. The current code may already be optimal. "
+                "When possible, the app will show a verified clean reference implementation with the same or better estimated complexity."
+            )
     st.markdown(f"**Before/After:** {plan.before_after}")
     if plan.rewrite_tests:
         with st.expander("Suggested validation tests for rewrite"):

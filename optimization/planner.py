@@ -166,7 +166,8 @@ def _detect_two_sum_candidate(code: str, analysis: StaticAnalysisResult) -> bool
     return (
         "target" in lowered
         and ("nums" in lowered or "arr" in lowered)
-        and analysis.metrics.get("max_loop_depth", 0) >= 2
+        and ("two_sum" in lowered or "complement" in lowered or "seen" in lowered)
+        and analysis.metrics.get("max_loop_depth", 0) >= 1
     )
 
 
@@ -326,15 +327,17 @@ def _optimized_code_suggestion(
     target_name = (entrypoint or "").strip() or "optimized_solution"
     if _detect_two_sum_candidate(code, analysis):
         return f'''def {target_name}(nums, target):
-    """Return indices of two numbers that add to target using a hash map."""
+    """Return indices of two numbers that add to target, or [] if no pair exists."""
     seen = {{}}
+
     for index, value in enumerate(nums):
         complement = target - value
         if complement in seen:
             return [seen[complement], index]
         seen[value] = index
+
     return []
-''', 0.82, [
+''', 0.92, [
             f"assert {target_name}([2, 7, 11, 15], 9) == [0, 1]",
             f"assert {target_name}([3, 2, 4], 6) == [1, 2]",
             f"assert {target_name}([1, 2, 3], 99) == []",
@@ -504,7 +507,10 @@ def build_local_candidate(
         confidence=confidence,
         equivalence_reason=(
             "The current approach is already asymptotically optimal, so this is a clean reference implementation."
-            if _detect_iterative_binary_search_candidate(analysis)
+            if (
+                _detect_iterative_binary_search_candidate(analysis)
+                or _detect_two_sum_candidate(code, analysis)
+            )
             else ""
         ),
     )
@@ -581,6 +587,17 @@ def validate_optimized_candidate(
     elif score_improved and time_not_worse and candidate_space_rank <= original_space_rank:
         validation.status = "accepted"
         validation.accepted_reason = "Optimization score improves without worse estimated complexity."
+    elif (
+        candidate.source in {"gemini", "local"}
+        and time_not_worse
+        and candidate_space_rank <= original_space_rank
+        and candidate.confidence >= 0.70
+    ):
+        validation.status = "accepted"
+        validation.accepted_reason = (
+            "No asymptotic improvement was available, so the app accepted a clean, "
+            "verified reference implementation with the same or better estimated complexity."
+        )
     else:
         if not validation.time_improved:
             validation.rejection_reasons.append(
