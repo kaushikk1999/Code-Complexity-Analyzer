@@ -142,6 +142,12 @@ def _queue_gemini_submit(flag_key: str) -> None:
     st.session_state[flag_key] = True
 
 
+def _validation_benchmark_input() -> str:
+    if st.session_state.get("static_only_mode", False):
+        return ""
+    return str(st.session_state.get("benchmark_input", "") or "")
+
+
 def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
     code = str(st.session_state.get("editor_code", "") or "")
     definitions = discover_entrypoints(code)
@@ -170,6 +176,7 @@ def _analyze_current(
         entrypoint=st.session_state.entrypoint,
         candidate=candidate,
         prior_rejection_reasons=prior_rejection_reasons,
+        benchmark_input=_validation_benchmark_input(),
     )
     st.session_state.analysis = analysis
     st.session_state.score = score
@@ -274,6 +281,11 @@ def _build_verified_optimization_plan(api_key: str) -> None:
         return
 
     if not api_key:
+        st.info(
+            "No Gemini API key was provided. For broader code generation and deeper optimization, "
+            "add a Gemini API key in the sidebar. For now, Complexity Lab will use its local "
+            "deterministic optimizer and only show code that passes local validation."
+        )
         _analyze_current(benchmark)
         return
 
@@ -299,6 +311,7 @@ def _build_verified_optimization_plan(api_key: str) -> None:
             score,
             candidate,
             entrypoint=st.session_state.entrypoint,
+            benchmark_input=_validation_benchmark_input(),
         )
         if validation.status == "accepted":
             accepted_candidate = candidate
@@ -609,8 +622,25 @@ def _render_optimization_tab(
     metric_cols[3].metric("Candidate Time", validation.candidate_time or "Not accepted")
     metric_cols[4].metric("Candidate Space", validation.candidate_space or "Not accepted")
 
+    already_optimal_linear = (
+        score.score >= 95
+        and analysis.estimated_time == "O(n)"
+        and analysis.estimated_space == "O(1)"
+    )
+    if already_optimal_linear and validation.status != "accepted":
+        st.info(
+            "The current solution is already asymptotically optimal. "
+            "No lower time/space complexity is available for the general problem. "
+            "The app will show a cleaner reference implementation when one passes validation."
+        )
+
     status_label = validation.status.replace("_", " ").title()
     status_detail = validation.accepted_reason or "No verified optimized code is available yet."
+    if already_optimal_linear and validation.status != "accepted":
+        status_detail = (
+            "Current solution is already asymptotically optimal. Showing a clean reference implementation "
+            "requires a same-complexity candidate that passes local validation."
+        )
     st.markdown(
         f"""
 <div class="glass-card">

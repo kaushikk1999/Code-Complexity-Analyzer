@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from analyzer.ast_analyzer import analyze_code
 from analyzer.complexity_rules import complexity_rank
 from analyzer.models import AntiPattern, StaticAnalysisResult
+from benchmarking.runner import run_benchmark
 from benchmarking.sandbox import validate_code_for_execution
 from scoring.optimizer_score import ScoreBreakdown, calculate_optimization_score
 
@@ -300,6 +301,8 @@ def preserve_entrypoint_name(code: str, entrypoint: str) -> str:
     entrypoint = (entrypoint or "").strip()
     if not entrypoint:
         return code
+    if "." in entrypoint:
+        return code
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -325,6 +328,35 @@ def _optimized_code_suggestion(
     entrypoint: str = "",
 ) -> tuple[Optional[str], float, List[str], List[str]]:
     target_name = (entrypoint or "").strip() or "optimized_solution"
+    lowered = code.lower()
+
+    if ("singlenumber" in lowered and "xor" in lowered) or (
+        "singlenumber" in lowered and "^" in code
+    ):
+        return '''class Solution:
+    def singleNumber(self, nums: List[int]) -> int:
+        """
+        Return the element that appears once when every other element appears twice.
+
+        Time: O(n)
+        Space: O(1)
+        """
+        result = 0
+        for num in nums:
+            result ^= num
+        return result
+''', 0.95, [
+            "assert Solution().singleNumber([2, 2, 1]) == 1",
+            "assert Solution().singleNumber([4, 1, 2, 1, 2]) == 4",
+            "assert Solution().singleNumber([1]) == 1",
+            "assert Solution().singleNumber([-1, -1, -2]) == -2",
+        ], [
+            "Use XOR because a ^ a cancels to 0 and 0 ^ x returns x.",
+            "Scan the array once.",
+            "Keep O(1) auxiliary space without a hash map.",
+            "Handle single-element and negative-number cases naturally.",
+        ]
+
     if _detect_two_sum_candidate(code, analysis):
         return f'''def {target_name}(nums, target):
     """Return indices of two numbers that add to target, or [] if no pair exists."""
@@ -516,11 +548,69 @@ def build_local_candidate(
     )
 
 
+def benchmark_candidate_against_original(
+    original_code: str,
+    candidate_code: str,
+    entrypoint: str,
+    benchmark_input: str,
+    repeat_count: int = 3,
+    timeout_seconds: float = 5.0,
+) -> tuple[bool, str]:
+    original = run_benchmark(
+        code=original_code,
+        entrypoint=entrypoint,
+        input_text=benchmark_input,
+        repeat_count=repeat_count,
+        warmup_count=1,
+        timeout_seconds=timeout_seconds,
+        allow_top_level=False,
+    )
+
+    candidate = run_benchmark(
+        code=candidate_code,
+        entrypoint=entrypoint,
+        input_text=benchmark_input,
+        repeat_count=repeat_count,
+        warmup_count=1,
+        timeout_seconds=timeout_seconds,
+        allow_top_level=False,
+    )
+
+    if not original.success:
+        return False, f"Original benchmark failed: {original.error}"
+
+    if not candidate.success:
+        return False, f"Candidate benchmark failed: {candidate.error}"
+
+    original_time = original.summary.avg_ms
+    candidate_time = candidate.summary.avg_ms
+    original_memory = original.summary.max_peak_memory_kb
+    candidate_memory = candidate.summary.max_peak_memory_kb
+
+    time_within_tolerance = candidate_time <= original_time * 1.10 or abs(candidate_time - original_time) <= 0.05
+    memory_within_tolerance = (
+        candidate_memory <= original_memory * 1.25 or abs(candidate_memory - original_memory) <= 1.0
+    )
+    if time_within_tolerance and memory_within_tolerance:
+        return True, (
+            f"Candidate benchmark accepted. Original avg: {original_time:.4f} ms, "
+            f"candidate avg: {candidate_time:.4f} ms. Original peak memory: "
+            f"{original_memory:.2f} KB, candidate peak memory: {candidate_memory:.2f} KB."
+        )
+
+    return False, (
+        f"Candidate benchmark rejected. Original avg: {original_time:.4f} ms, "
+        f"candidate avg: {candidate_time:.4f} ms. Original peak memory: "
+        f"{original_memory:.2f} KB, candidate peak memory: {candidate_memory:.2f} KB."
+    )
+
+
 def validate_optimized_candidate(
     original_analysis: StaticAnalysisResult,
     original_score: ScoreBreakdown,
     candidate: Optional[OptimizedCodeCandidate],
     entrypoint: str = "",
+    benchmark_input: str = "",
 ) -> tuple[Optional[str], OptimizedCodeValidation]:
     if not candidate or not (candidate.code or "").strip():
         return None, OptimizedCodeValidation(
@@ -554,9 +644,10 @@ def validate_optimized_candidate(
         validation.rejection_reasons.append(candidate_analysis.parse_error or "Candidate code could not be parsed.")
         return None, validation
 
-    function_names = _top_level_function_names(normalized_code)
-    if entrypoint and entrypoint not in function_names:
-        validation.rejection_reasons.append(f"Candidate must define the configured entrypoint `{entrypoint}`.")
+    if entrypoint and not _has_entrypoint(normalized_code, entrypoint):
+        validation.rejection_reasons.append(
+            f"Candidate must define the configured entrypoint `{entrypoint}`."
+        )
         return None, validation
 
     candidate_score = calculate_optimization_score(candidate_analysis)
@@ -613,6 +704,21 @@ def validate_optimized_candidate(
             )
         return None, validation
 
+    if benchmark_input and entrypoint:
+        benchmark_ok, benchmark_note = benchmark_candidate_against_original(
+            original_code=original_analysis.raw_code,
+            candidate_code=normalized_code,
+            entrypoint=entrypoint,
+            benchmark_input=benchmark_input,
+        )
+
+        if not benchmark_ok:
+            validation.status = "rejected"
+            validation.rejection_reasons.append(benchmark_note)
+            return None, validation
+
+        validation.safety_notes.append(benchmark_note)
+
     return normalized_code, validation
 
 
@@ -653,6 +759,7 @@ def build_optimization_plan(
     entrypoint: str = "",
     candidate: Optional[OptimizedCodeCandidate] = None,
     prior_rejection_reasons: Optional[List[str]] = None,
+    benchmark_input: str = "",
 ) -> OptimizationPlan:
     steps = [_step_from_pattern(pattern) for pattern in analysis.anti_patterns]
     quick = [step for step in steps if step.priority in {"low", "medium"}][:3]
@@ -693,10 +800,22 @@ def build_optimization_plan(
     )
 
     selected_candidate = candidate or build_local_candidate(analysis.raw_code, analysis, entrypoint)
-    optimized_code, validation = validate_optimized_candidate(analysis, score, selected_candidate, entrypoint)
+    optimized_code, validation = validate_optimized_candidate(
+        analysis,
+        score,
+        selected_candidate,
+        entrypoint,
+        benchmark_input=benchmark_input,
+    )
     if validation.status != "accepted" and candidate is not None:
         fallback = build_local_candidate(analysis.raw_code, analysis, entrypoint)
-        fallback_code, fallback_validation = validate_optimized_candidate(analysis, score, fallback, entrypoint)
+        fallback_code, fallback_validation = validate_optimized_candidate(
+            analysis,
+            score,
+            fallback,
+            entrypoint,
+            benchmark_input=benchmark_input,
+        )
         fallback_validation.rejection_reasons = (
             list(prior_rejection_reasons or [])
             + validation.rejection_reasons

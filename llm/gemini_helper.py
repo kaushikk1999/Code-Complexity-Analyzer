@@ -243,7 +243,10 @@ Required JSON shape:
 }}
 
 Rules:
-- Preserve the configured entrypoint function name exactly: {entrypoint!r}.
+- Preserve the configured entrypoint exactly: {entrypoint!r}.
+- If the entrypoint contains a dot, such as "Solution.singleNumber", return the same class name and method name.
+- For LeetCode-style code, keep the class wrapper.
+- Keep the same method arguments and return type behavior.
 - Keep the function callable with the same benchmark input shape.
 - Generate the best practical version of the code.
 - Prefer the lowest possible time complexity.
