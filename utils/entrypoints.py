@@ -195,7 +195,42 @@ def validate_call_arguments(
     return ""
 
 
+def normalize_leetcode_style_assignments(text: str) -> str:
+    """Convert LeetCode-style copied input into Python assignment input.
+
+    Example:
+        s =
+        "leetcode"
+        wordDict =
+        ["leet", "code"]
+
+    becomes:
+        s = "leetcode"
+        wordDict = ["leet", "code"]
+    """
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    normalized = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+
+        if line.endswith("=") and index + 1 < len(lines):
+            name = line[:-1].strip()
+            value = lines[index + 1].strip()
+            if name.isidentifier():
+                normalized.append(f"{name} = {value}")
+                index += 2
+                continue
+
+        normalized.append(line)
+        index += 1
+
+    return "\n".join(normalized)
+
+
 def literal_assignment_namespace(text: str) -> Dict[str, Any]:
+    text = normalize_leetcode_style_assignments(text or "")
     tree = ast.parse(text or "", mode="exec")
     namespace: Dict[str, Any] = {}
     for node in tree.body:

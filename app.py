@@ -48,6 +48,7 @@ from utils.entrypoints import choose_entrypoint, discover_entrypoints
 from utils.examples import EXAMPLES, get_example
 from utils.history_store import load_recent_records, progress_summary, save_analysis_record
 from utils.report_export import build_html_report, build_linkedin_summary, build_markdown_report
+from utils.test_case_generator import generate_test_cases
 from visualization.charts import (
     history_chart,
     memory_chart,
@@ -108,6 +109,7 @@ def _initialize_state() -> None:
         "docker_backend": False,
         "allow_top_level_benchmark": False,
         "interview_answer": "",
+        "generated_test_cases": [],
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -121,6 +123,7 @@ def _clear_outputs() -> None:
     st.session_state.plan = None
     st.session_state.gemini_text = None
     st.session_state.answer_grade = None
+    st.session_state.generated_test_cases = []
 
 
 def _gemini_key_widget_key() -> str:
@@ -170,6 +173,12 @@ def _analyze_current(
         return
     analysis = analyze_code(code)
     score = calculate_optimization_score(analysis, benchmark)
+    definitions = discover_entrypoints(code)
+    st.session_state.generated_test_cases = generate_test_cases(
+        code=code,
+        entrypoint=st.session_state.entrypoint,
+        definitions=definitions,
+    )
     plan = build_optimization_plan(
         analysis,
         score,
@@ -486,6 +495,27 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
             width="stretch",
             hide_index=True,
         )
+
+    generated_cases = st.session_state.get("generated_test_cases", [])
+    if generated_cases:
+        st.subheader("Generated Test Cases")
+        st.caption("These are locally generated from the detected entrypoint and code shape.")
+
+        for index, case in enumerate(generated_cases, start=1):
+            with st.expander(f"Test case {index}: {case.name}", expanded=index == 1):
+                st.code(case.benchmark_input, language="json")
+                if case.expected_output:
+                    st.write(f"Expected output: `{case.expected_output}`")
+                if case.reason:
+                    st.caption(case.reason)
+
+                if st.button(
+                    f"Use as benchmark input #{index}",
+                    key=f"use_generated_case_{index}",
+                ):
+                    st.session_state.benchmark_input = case.benchmark_input
+                    st.success("Benchmark input updated from generated test case.")
+                    _rerun()
 
     if analysis.anti_patterns:
         st.subheader("Detected Bottlenecks")

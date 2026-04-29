@@ -83,7 +83,15 @@ def _parse_benchmark_input(
                     return _parse_assignment_benchmark_input(text, code, definition)
                 except Exception:
                     pass
-            raise ValueError(f"Benchmark input must be JSON or a Python literal: {exc}") from exc
+            raise ValueError(
+                "Benchmark input must be JSON, a Python literal, or assignment-style input.\n\n"
+                "Valid examples:\n"
+                '{"args": ["leetcode", ["leet", "code"]]}\n\n'
+                '{"kwargs": {"s": "leetcode", "wordDict": ["leet", "code"]}}\n\n'
+                's = "leetcode"\n'
+                'wordDict = ["leet", "code"]\n\n'
+                f"Parser detail: {exc}"
+            ) from exc
 
     if isinstance(value, dict) and ("args" in value or "kwargs" in value):
         args_value = value.get("args", [])
