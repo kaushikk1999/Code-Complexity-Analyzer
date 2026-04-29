@@ -103,12 +103,15 @@ def _initialize_state() -> None:
         "gemini_api_key": "",
         "gemini_api_key_widget_version": 0,
         "pending_gemini_api_key": "",
+        "gemini_prompt_decision": "",
+        "gemini_key_requested": False,
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
         "docker_backend": False,
         "allow_top_level_benchmark": False,
         "interview_answer": "",
+        "benchmark_input_entrypoint": "",
         "generated_test_cases": [],
     }
     for key, value in defaults.items():
@@ -145,10 +148,88 @@ def _queue_gemini_submit(flag_key: str) -> None:
     st.session_state[flag_key] = True
 
 
+@st.dialog("Unlock stronger optimization with Gemini")
+def _gemini_key_dialog(source: str) -> None:
+    st.write(
+        "Gemini can search a wider optimization space and propose stronger candidate rewrites. "
+        "Your code will still be locally validated and benchmarked before any generated code is accepted."
+    )
+    key = st.text_input(
+        "Gemini API key",
+        type="password",
+        key=f"gemini_key_dialog_input_{source}",
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Use Gemini", key=f"use_gemini_{source}"):
+            st.session_state.pending_gemini_api_key = key.strip()
+            st.session_state.gemini_api_key = ""
+            st.session_state.gemini_prompt_decision = "accepted"
+            st.session_state.gemini_key_requested = False
+            st.rerun()
+    with col2:
+        if st.button("Continue without Gemini", key=f"skip_gemini_{source}"):
+            st.session_state.pending_gemini_api_key = ""
+            st.session_state.gemini_prompt_decision = "declined"
+            st.session_state.gemini_key_requested = False
+            st.rerun()
+
+
+def _resolve_gemini_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
+    api_key = str(st.session_state.get("pending_gemini_api_key", "") or fallback_key or "").strip()
+    if api_key:
+        st.session_state.pending_gemini_api_key = ""
+        st.session_state.gemini_prompt_decision = ""
+        st.session_state.gemini_key_requested = False
+        return api_key
+
+    if st.session_state.get("gemini_prompt_decision") not in {"declined"}:
+        st.session_state.gemini_key_requested = True
+        _gemini_key_dialog(source)
+        return None
+
+    st.warning(
+        "Continuing without Gemini. Complexity Lab will use its local optimizer, "
+        "but Gemini can often generate broader rewrite candidates. Any candidate is still "
+        "locally analyzed and benchmarked before it is shown."
+    )
+    return ""
+
+
 def _validation_benchmark_input() -> str:
     if st.session_state.get("static_only_mode", False):
         return ""
     return str(st.session_state.get("benchmark_input", "") or "")
+
+
+def _default_generated_benchmark_input() -> str:
+    cases = st.session_state.get("generated_test_cases", [])
+    if cases:
+        return str(cases[0].benchmark_input or "")
+    return ""
+
+
+def _refresh_benchmark_input_for_entrypoint(force: bool = False) -> None:
+    current_entrypoint = str(st.session_state.get("entrypoint", "") or "")
+    last_entrypoint = str(st.session_state.get("benchmark_input_entrypoint", "") or "")
+
+    generated_default = _default_generated_benchmark_input()
+    if not generated_default:
+        return
+
+    current_input = str(st.session_state.get("benchmark_input", "") or "").strip()
+
+    stale_entrypoint = current_entrypoint and current_entrypoint != last_entrypoint
+    empty_input = not current_input
+    looks_like_two_sum_demo = (
+        '"args"' in current_input
+        and "[2, 7, 11, 15" in current_input
+        and "57" in current_input
+    )
+
+    if force or empty_input or stale_entrypoint or looks_like_two_sum_demo:
+        st.session_state.benchmark_input = generated_default
+        st.session_state.benchmark_input_entrypoint = current_entrypoint
 
 
 def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
@@ -167,7 +248,7 @@ def _analyze_current(
     prior_rejection_reasons: Optional[List[str]] = None,
 ) -> None:
     code = st.session_state.editor_code
-    _sync_entrypoint_with_code(update_state=False)
+    _sync_entrypoint_with_code(update_state=True)
     if len(code) > MAX_CODE_CHARS:
         st.error(f"Code is too large for this app demo. Limit: {MAX_CODE_CHARS:,} characters.")
         return
@@ -179,6 +260,7 @@ def _analyze_current(
         entrypoint=st.session_state.entrypoint,
         definitions=definitions,
     )
+    _refresh_benchmark_input_for_entrypoint()
     plan = build_optimization_plan(
         analysis,
         score,
@@ -198,7 +280,14 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
         return None
     settings = profile_settings(st.session_state.benchmark_profile)
     code = st.session_state.editor_code
-    _sync_entrypoint_with_code(update_state=False)
+    _sync_entrypoint_with_code(update_state=True)
+    definitions = discover_entrypoints(code)
+    st.session_state.generated_test_cases = generate_test_cases(
+        code=code,
+        entrypoint=st.session_state.entrypoint,
+        definitions=definitions,
+    )
+    _refresh_benchmark_input_for_entrypoint()
     if st.session_state.docker_backend:
         benchmark = run_benchmark_in_docker(
             code=code,
@@ -239,7 +328,14 @@ def _run_scaling() -> None:
         st.warning("Static-only mode is enabled, so scaling benchmarks are disabled.")
         return
     settings = profile_settings(st.session_state.benchmark_profile)
-    _sync_entrypoint_with_code(update_state=False)
+    _sync_entrypoint_with_code(update_state=True)
+    definitions = discover_entrypoints(st.session_state.editor_code)
+    st.session_state.generated_test_cases = generate_test_cases(
+        code=st.session_state.editor_code,
+        entrypoint=st.session_state.entrypoint,
+        definitions=definitions,
+    )
+    _refresh_benchmark_input_for_entrypoint()
     sizes = st.session_state.scaling_sizes
     if isinstance(sizes, str):
         parsed_sizes = [int(item.strip()) for item in sizes.split(",") if item.strip().isdigit()]
@@ -514,6 +610,7 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
                     key=f"use_generated_case_{index}",
                 ):
                     st.session_state.benchmark_input = case.benchmark_input
+                    st.session_state.benchmark_input_entrypoint = st.session_state.entrypoint
                     st.success("Benchmark input updated from generated test case.")
                     _rerun()
 
@@ -645,6 +742,18 @@ def _render_optimization_tab(
         unsafe_allow_html=True,
     )
     validation = plan.validation
+    if validation.status == "accepted" and validation.candidate_score < validation.original_score:
+        st.error(
+            "Internal validation error: candidate was accepted even though its score decreased. "
+            "This candidate will not be displayed."
+        )
+        plan.optimized_code = None
+        validation.status = "rejected"
+        validation.accepted_reason = ""
+        validation.rejection_reasons.append(
+            "Internal validation guard blocked an accepted candidate with a lower optimization score."
+        )
+
     metric_cols = st.columns(5)
     metric_cols[0].metric("Current Time", analysis.estimated_time)
     metric_cols[1].metric("Current Space", analysis.estimated_space)
@@ -693,6 +802,35 @@ def _render_optimization_tab(
             for reason in validation.rejection_reasons:
                 st.write(f"- {reason}")
 
+    st.subheader("Verified Optimization Candidates")
+    if plan.tiered_candidates:
+        tier_columns = st.columns(3)
+        for column, candidate in zip(tier_columns, plan.tiered_candidates):
+            with column:
+                st.markdown(f"##### {candidate.tier}")
+                expander_title = candidate.title.replace(f"{candidate.tier}: ", "")
+                with st.expander(expander_title, expanded=candidate.accepted):
+                    st.write(candidate.explanation)
+                    st.write(f"Expected time: `{candidate.expected_time}`")
+                    st.write(f"Expected space: `{candidate.expected_space}`")
+                    if candidate.benchmark_comparison:
+                        comparison = candidate.benchmark_comparison
+                        st.write(
+                            f"Original avg: {comparison.original_avg_ms:.4f} ms; "
+                            f"Candidate avg: {comparison.candidate_avg_ms:.4f} ms"
+                        )
+                        st.write(
+                            f"Original peak memory: {comparison.original_peak_memory_kb:.2f} KB; "
+                            f"Candidate peak memory: {comparison.candidate_peak_memory_kb:.2f} KB"
+                        )
+                    if candidate.accepted:
+                        st.success("Accepted")
+                        st.code(candidate.code, language="python")
+                    else:
+                        st.warning(candidate.rejection_reason or "Rejected because it did not beat the original.")
+    else:
+        st.info("No verified optimization candidates were generated for the current code.")
+
     if plan.step_by_step_plan:
         st.subheader("Step-by-Step Optimization Plan")
         for index, item in enumerate(plan.step_by_step_plan, start=1):
@@ -721,7 +859,7 @@ def _render_optimization_tab(
         else:
             st.caption("No advanced rewrite was detected from current static signals.")
 
-    st.subheader("Original vs Optimized Suggestion")
+    st.subheader("Original vs Best Verified Suggestion")
     before, after = st.columns(2)
     with before:
         st.caption("Original")
@@ -734,8 +872,8 @@ def _render_optimization_tab(
             st.code(plan.optimized_code, language="python")
         else:
             st.info(
-                "No asymptotically better rewrite was found. The current code may already be optimal. "
-                "When possible, the app will show a verified clean reference implementation with the same or better estimated complexity."
+                "No verified better rewrite was found. The original code remains the best validated version "
+                "for the current benchmark input."
             )
     st.markdown(f"**Before/After:** {plan.before_after}")
     if plan.rewrite_tests:
@@ -947,10 +1085,16 @@ def _render_algorithm_planner_tab() -> None:
         args=("algorithm_planner_submit_pending",),
     )
 
-    pending_submit = bool(st.session_state.pop("algorithm_planner_submit_pending", False))
+    pending_submit = bool(st.session_state.get("algorithm_planner_submit_pending", False))
     if submitted or pending_submit:
+        current_api_key = _resolve_gemini_key_for_action(
+            "algorithm_planner",
+            str(st.session_state.get("gemini_api_key", "") or ""),
+        )
+        if current_api_key is None:
+            return
+        st.session_state.algorithm_planner_submit_pending = False
         current_question = str(st.session_state.get("algorithm_planner_question", question) or "")
-        current_api_key = str(st.session_state.pop("pending_gemini_api_key", "") or "")
         with st.spinner("Generating optimization plan..."):
             st.session_state.algorithm_planner_result = generate_algorithm_optimization_plan(
                 current_question,
@@ -1006,10 +1150,13 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
         with st.spinner("Running generated input-size scaling experiments..."):
             st.session_state.gemini_text = None
             _run_scaling()
-    pending_plan_click = bool(st.session_state.pop("code_analyzer_plan_submit_pending", False))
+    pending_plan_click = bool(st.session_state.get("code_analyzer_plan_submit_pending", False))
     if plan_clicked or pending_plan_click:
+        current_api_key = _resolve_gemini_key_for_action("code_analyzer", gemini_api_key)
+        if current_api_key is None:
+            return
+        st.session_state.code_analyzer_plan_submit_pending = False
         with st.spinner("Analyzing code, collecting benchmark metrics, and validating optimized candidates..."):
-            current_api_key = str(st.session_state.pop("pending_gemini_api_key", "") or gemini_api_key or "")
             _build_verified_optimization_plan(current_api_key)
     if save_clicked:
         _save_current_record()
@@ -1075,6 +1222,7 @@ def main() -> None:
                 st.session_state.editor_code = example["code"]
                 st.session_state.benchmark_input = example["input"]
                 st.session_state.entrypoint = example["entrypoint"]
+                st.session_state.benchmark_input_entrypoint = example["entrypoint"]
                 _clear_outputs()
                 _rerun()
         with reset_col:
@@ -1082,6 +1230,7 @@ def main() -> None:
                 st.session_state.editor_code = DEFAULT_CODE
                 st.session_state.benchmark_input = DEFAULT_INPUT
                 st.session_state.entrypoint = "two_sum"
+                st.session_state.benchmark_input_entrypoint = "two_sum"
                 st.session_state.benchmark_history = []
                 _clear_outputs()
                 _rerun()
@@ -1123,6 +1272,13 @@ def main() -> None:
                 key="entrypoint",
                 help="No functions were detected. Leave blank to benchmark top-level script execution.",
             )
+        definitions = discover_entrypoints(str(st.session_state.get("editor_code", "") or ""))
+        st.session_state.generated_test_cases = generate_test_cases(
+            code=str(st.session_state.get("editor_code", "") or ""),
+            entrypoint=st.session_state.entrypoint,
+            definitions=definitions,
+        )
+        _refresh_benchmark_input_for_entrypoint()
         st.text_area(
             "Benchmark input",
             key="benchmark_input",

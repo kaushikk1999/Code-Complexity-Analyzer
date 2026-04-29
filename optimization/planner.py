@@ -42,6 +42,20 @@ class OptimizedCodeCandidate:
 
 
 @dataclass
+class CandidateBenchmarkComparison:
+    original_success: bool = False
+    candidate_success: bool = False
+    original_avg_ms: float = 0.0
+    candidate_avg_ms: float = 0.0
+    original_peak_memory_kb: float = 0.0
+    candidate_peak_memory_kb: float = 0.0
+    runtime_ratio: float = 0.0
+    memory_ratio: float = 0.0
+    accepted: bool = False
+    reason: str = ""
+
+
+@dataclass
 class OptimizedCodeValidation:
     source: str = "none"
     status: str = "not_generated"
@@ -59,6 +73,20 @@ class OptimizedCodeValidation:
     accepted_reason: str = ""
     rejection_reasons: List[str] = field(default_factory=list)
     safety_notes: List[str] = field(default_factory=list)
+    benchmark_comparison: Optional[CandidateBenchmarkComparison] = None
+
+
+@dataclass
+class TieredOptimizationCandidate:
+    tier: str
+    title: str
+    code: str
+    expected_time: str
+    expected_space: str
+    explanation: str
+    benchmark_comparison: Optional[CandidateBenchmarkComparison] = None
+    accepted: bool = False
+    rejection_reason: str = ""
 
 
 @dataclass
@@ -78,6 +106,7 @@ class OptimizationPlan:
     candidate_source: str = "local"
     candidate_explanation: str = ""
     step_by_step_plan: List[str] = field(default_factory=list)
+    tiered_candidates: List[TieredOptimizationCandidate] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -178,6 +207,16 @@ def _detect_iterative_binary_search_candidate(analysis: StaticAnalysisResult) ->
         and not analysis.metrics.get("recursive_binary_search_markers", 0)
         and analysis.estimated_time == "O(log n)"
         and analysis.estimated_space == "O(1)"
+    )
+
+
+def _detect_word_break_candidate(code: str, entrypoint: str) -> bool:
+    lowered = f"{entrypoint}\n{code}".lower()
+    return (
+        "wordbreak" in lowered
+        and "worddict" in lowered
+        and "dp" in lowered
+        and "s[" in lowered
     )
 
 
@@ -322,6 +361,93 @@ def preserve_entrypoint_name(code: str, entrypoint: str) -> str:
         return code
 
 
+def _word_break_code(entrypoint: str, variant: str = "quick") -> str:
+    target_name = (entrypoint or "").strip() or "wordBreak"
+    if "." in target_name:
+        class_name, method_name = target_name.split(".", 1)
+        signature = f"class {class_name}:\n    def {method_name}(self, s: str, wordDict: List[str]) -> bool:"
+        indent = "        "
+    else:
+        signature = f"def {target_name}(s: str, wordDict: List[str]) -> bool:"
+        indent = "    "
+
+    if variant == "medium":
+        body = f'''{indent}if not wordDict:
+{indent}    return s == ""
+
+{indent}words = set(wordDict)
+{indent}lengths = sorted({{len(word) for word in words}})
+{indent}n = len(s)
+{indent}dp = [False] * (n + 1)
+{indent}dp[0] = True
+
+{indent}for end in range(1, n + 1):
+{indent}    for length in lengths:
+{indent}        if length > end:
+{indent}            break
+{indent}        begin = end - length
+{indent}        if dp[begin] and s[begin:end] in words:
+{indent}            dp[end] = True
+{indent}            break
+
+{indent}return dp[n]
+'''
+    elif variant == "advanced":
+        body = f'''{indent}if not wordDict:
+{indent}    return s == ""
+
+{indent}trie = {{}}
+{indent}terminal = "#"
+{indent}for word in wordDict:
+{indent}    node = trie
+{indent}    for char in word:
+{indent}        node = node.setdefault(char, {{}})
+{indent}    node[terminal] = True
+
+{indent}n = len(s)
+{indent}reachable = [False] * (n + 1)
+{indent}reachable[0] = True
+
+{indent}for start in range(n):
+{indent}    if not reachable[start]:
+{indent}        continue
+{indent}    node = trie
+{indent}    for end in range(start, n):
+{indent}        char = s[end]
+{indent}        if char not in node:
+{indent}            break
+{indent}        node = node[char]
+{indent}        if terminal in node:
+{indent}            reachable[end + 1] = True
+{indent}            if end + 1 == n:
+{indent}                return True
+
+{indent}return reachable[n]
+'''
+    else:
+        body = f'''{indent}if not wordDict:
+{indent}    return s == ""
+
+{indent}words = set(wordDict)
+{indent}max_len = max(map(len, words))
+{indent}n = len(s)
+
+{indent}dp = [False] * (n + 1)
+{indent}dp[0] = True
+
+{indent}for end in range(1, n + 1):
+{indent}    start = max(0, end - max_len)
+{indent}    for begin in range(start, end):
+{indent}        if dp[begin] and s[begin:end] in words:
+{indent}            dp[end] = True
+{indent}            break
+
+{indent}return dp[n]
+'''
+
+    return f"from typing import List\n\n{signature}\n{body}"
+
+
 def _optimized_code_suggestion(
     code: str,
     analysis: StaticAnalysisResult,
@@ -355,6 +481,21 @@ def _optimized_code_suggestion(
             "Scan the array once.",
             "Keep O(1) auxiliary space without a hash map.",
             "Handle single-element and negative-number cases naturally.",
+        ]
+
+    if _detect_word_break_candidate(code, entrypoint):
+        optimized_code = _word_break_code(entrypoint, "quick")
+        return optimized_code, 0.90, [
+            'assert Solution().wordBreak("leetcode", ["leet", "code"]) is True',
+            'assert Solution().wordBreak("catsandog", ["cats", "dog", "sand", "and", "cat"]) is False',
+            'assert Solution().wordBreak("applepenapple", ["apple", "pen"]) is True',
+            'assert Solution().wordBreak("", ["a", "abc"]) is True',
+            'assert Solution().wordBreak("a", []) is False',
+        ], [
+            "Keep the DP algorithm because it is already a standard solution.",
+            "Add an empty dictionary guard.",
+            "Use max word length pruning to reduce unnecessary substring checks.",
+            "Do not add sorted unique lengths unless benchmarks prove it helps.",
         ]
 
     if _detect_two_sum_candidate(code, analysis):
@@ -542,6 +683,7 @@ def build_local_candidate(
             if (
                 _detect_iterative_binary_search_candidate(analysis)
                 or _detect_two_sum_candidate(code, analysis)
+                or _detect_word_break_candidate(code, entrypoint)
             )
             else ""
         ),
@@ -556,6 +698,31 @@ def benchmark_candidate_against_original(
     repeat_count: int = 3,
     timeout_seconds: float = 5.0,
 ) -> tuple[bool, str]:
+    comparison = compare_candidate_benchmark(
+        original_code=original_code,
+        candidate_code=candidate_code,
+        entrypoint=entrypoint,
+        benchmark_input=benchmark_input,
+        repeat_count=repeat_count,
+        timeout_seconds=timeout_seconds,
+    )
+    return comparison.accepted, comparison.reason
+
+
+def compare_candidate_benchmark(
+    original_code: str,
+    candidate_code: str,
+    entrypoint: str,
+    benchmark_input: str,
+    repeat_count: int = 5,
+    timeout_seconds: float = 5.0,
+) -> CandidateBenchmarkComparison:
+    if not benchmark_input.strip():
+        return CandidateBenchmarkComparison(
+            accepted=False,
+            reason="No benchmark input was provided for original-vs-candidate validation.",
+        )
+
     original = run_benchmark(
         code=original_code,
         entrypoint=entrypoint,
@@ -576,33 +743,88 @@ def benchmark_candidate_against_original(
         allow_top_level=False,
     )
 
+    comparison = CandidateBenchmarkComparison(
+        original_success=original.success,
+        candidate_success=candidate.success,
+    )
+
     if not original.success:
-        return False, f"Original benchmark failed: {original.error}"
+        comparison.reason = f"Original benchmark failed: {original.error}"
+        return comparison
 
     if not candidate.success:
-        return False, f"Candidate benchmark failed: {candidate.error}"
+        comparison.reason = f"Candidate benchmark failed: {candidate.error}"
+        return comparison
 
-    original_time = original.summary.avg_ms
-    candidate_time = candidate.summary.avg_ms
-    original_memory = original.summary.max_peak_memory_kb
-    candidate_memory = candidate.summary.max_peak_memory_kb
+    original_avg = original.summary.avg_ms
+    candidate_avg = candidate.summary.avg_ms
+    original_mem = original.summary.max_peak_memory_kb
+    candidate_mem = candidate.summary.max_peak_memory_kb
 
-    time_within_tolerance = candidate_time <= original_time * 1.10 or abs(candidate_time - original_time) <= 0.05
-    memory_within_tolerance = (
-        candidate_memory <= original_memory * 1.25 or abs(candidate_memory - original_memory) <= 1.0
-    )
-    if time_within_tolerance and memory_within_tolerance:
-        return True, (
-            f"Candidate benchmark accepted. Original avg: {original_time:.4f} ms, "
-            f"candidate avg: {candidate_time:.4f} ms. Original peak memory: "
-            f"{original_memory:.2f} KB, candidate peak memory: {candidate_memory:.2f} KB."
+    comparison.original_avg_ms = original_avg
+    comparison.candidate_avg_ms = candidate_avg
+    comparison.original_peak_memory_kb = original_mem
+    comparison.candidate_peak_memory_kb = candidate_mem
+    comparison.runtime_ratio = candidate_avg / max(original_avg, 1e-9)
+    comparison.memory_ratio = candidate_mem / max(original_mem, 1e-9)
+    return comparison
+
+
+def _candidate_is_better_or_safe(
+    validation: OptimizedCodeValidation,
+    original_score: ScoreBreakdown,
+    candidate_score: ScoreBreakdown,
+    original_time_rank: int,
+    candidate_time_rank: int,
+    original_space_rank: int,
+    candidate_space_rank: int,
+    benchmark_comparison: Optional[CandidateBenchmarkComparison],
+) -> tuple[bool, str]:
+    time_improved = candidate_time_rank < original_time_rank
+    space_improved = candidate_space_rank < original_space_rank
+    time_not_worse = candidate_time_rank <= original_time_rank
+    space_not_worse = candidate_space_rank <= original_space_rank
+    score_not_worse = candidate_score.score >= original_score.score
+    score_improved = candidate_score.score >= original_score.score + 3
+
+    if time_improved and space_not_worse:
+        return True, "Accepted because estimated time complexity improves and estimated space does not worsen."
+    if space_improved and time_not_worse:
+        return True, "Accepted because estimated space complexity improves and estimated time does not worsen."
+    if not time_not_worse:
+        return False, "Rejected because estimated time complexity worsened."
+    if not space_not_worse:
+        return False, "Rejected because estimated space complexity worsened."
+    if not score_not_worse:
+        return False, (
+            f"Rejected because optimization score decreased "
+            f"({original_score.score} -> {candidate_score.score})."
         )
 
-    return False, (
-        f"Candidate benchmark rejected. Original avg: {original_time:.4f} ms, "
-        f"candidate avg: {candidate_time:.4f} ms. Original peak memory: "
-        f"{original_memory:.2f} KB, candidate peak memory: {candidate_memory:.2f} KB."
-    )
+    if benchmark_comparison:
+        if not benchmark_comparison.original_success or not benchmark_comparison.candidate_success:
+            return False, benchmark_comparison.reason
+        runtime_ok = benchmark_comparison.candidate_avg_ms <= benchmark_comparison.original_avg_ms * 1.05
+        memory_ok = benchmark_comparison.candidate_peak_memory_kb <= benchmark_comparison.original_peak_memory_kb * 1.10
+        benchmark_comparison.accepted = runtime_ok and memory_ok
+        if not runtime_ok:
+            return False, (
+                "Rejected because candidate benchmark runtime is worse. "
+                f"Original avg: {benchmark_comparison.original_avg_ms:.4f} ms; "
+                f"candidate avg: {benchmark_comparison.candidate_avg_ms:.4f} ms."
+            )
+        if not memory_ok:
+            return False, (
+                "Rejected because candidate benchmark memory is worse. "
+                f"Original peak: {benchmark_comparison.original_peak_memory_kb:.2f} KB; "
+                f"candidate peak: {benchmark_comparison.candidate_peak_memory_kb:.2f} KB."
+            )
+
+    if score_improved:
+        return True, "Accepted because score improves without worse estimated time or space."
+    if score_not_worse and benchmark_comparison and benchmark_comparison.accepted:
+        return True, "Accepted because candidate is not worse by score, complexity, runtime, or memory."
+    return False, "Rejected because candidate does not improve score, time complexity, space complexity, runtime, or memory."
 
 
 def validate_optimized_candidate(
@@ -664,62 +886,189 @@ def validate_optimized_candidate(
     validation.space_improved = candidate_space_rank < original_space_rank
     validation.memory_tradeoff = candidate_space_rank > original_space_rank and validation.time_improved
 
-    time_not_worse = candidate_time_rank <= original_time_rank
-    score_improved = validation.score_delta >= 5
-    if validation.time_improved:
-        validation.status = "accepted"
-        validation.accepted_reason = "Estimated time complexity improves."
-    elif validation.space_improved and time_not_worse and validation.score_delta >= 0:
-        validation.status = "accepted"
-        validation.accepted_reason = "Estimated auxiliary space improves without worse estimated time."
-    elif candidate.equivalence_reason and time_not_worse and candidate_space_rank <= original_space_rank:
-        validation.status = "accepted"
-        validation.accepted_reason = candidate.equivalence_reason
-    elif score_improved and time_not_worse and candidate_space_rank <= original_space_rank:
-        validation.status = "accepted"
-        validation.accepted_reason = "Optimization score improves without worse estimated complexity."
-    elif (
-        candidate.source in {"gemini", "local"}
-        and time_not_worse
-        and candidate_space_rank <= original_space_rank
-        and candidate.confidence >= 0.70
-    ):
-        validation.status = "accepted"
-        validation.accepted_reason = (
-            "No asymptotic improvement was available, so the app accepted a clean, "
-            "verified reference implementation with the same or better estimated complexity."
-        )
-    else:
-        if not validation.time_improved:
-            validation.rejection_reasons.append(
-                f"Estimated time did not improve ({original_analysis.estimated_time} -> {candidate_analysis.estimated_time})."
-            )
-        if validation.score_delta < 5:
-            validation.rejection_reasons.append(
-                f"Optimization score did not improve enough ({original_score.score} -> {candidate_score.score})."
-            )
-        if candidate_space_rank > original_space_rank and not validation.time_improved:
-            validation.rejection_reasons.append(
-                f"Estimated space worsened without a time-complexity improvement ({original_analysis.estimated_space} -> {candidate_analysis.estimated_space})."
-            )
-        return None, validation
-
+    benchmark_comparison = None
     if benchmark_input and entrypoint:
-        benchmark_ok, benchmark_note = benchmark_candidate_against_original(
+        benchmark_comparison = compare_candidate_benchmark(
             original_code=original_analysis.raw_code,
             candidate_code=normalized_code,
             entrypoint=entrypoint,
             benchmark_input=benchmark_input,
         )
+        validation.benchmark_comparison = benchmark_comparison
 
-        if not benchmark_ok:
+    if candidate_score.score < original_score.score:
+        if not validation.time_improved and not validation.space_improved:
             validation.status = "rejected"
-            validation.rejection_reasons.append(benchmark_note)
+            validation.rejection_reasons.append(
+                f"Candidate score decreased ({original_score.score} -> {candidate_score.score}) "
+                "without improving estimated time or space complexity."
+            )
             return None, validation
 
-        validation.safety_notes.append(benchmark_note)
+    accepted, reason = _candidate_is_better_or_safe(
+        validation=validation,
+        original_score=original_score,
+        candidate_score=candidate_score,
+        original_time_rank=original_time_rank,
+        candidate_time_rank=candidate_time_rank,
+        original_space_rank=original_space_rank,
+        candidate_space_rank=candidate_space_rank,
+        benchmark_comparison=benchmark_comparison,
+    )
+    if not accepted:
+        validation.status = "rejected"
+        validation.rejection_reasons.append(reason)
+        if benchmark_comparison and benchmark_comparison.reason and benchmark_comparison.reason not in reason:
+            validation.rejection_reasons.append(benchmark_comparison.reason)
+        return None, validation
+
+    validation.status = "accepted"
+    validation.accepted_reason = reason
+    if benchmark_comparison and benchmark_comparison.accepted:
+        validation.safety_notes.append(
+            f"Candidate benchmark accepted. Original avg: {benchmark_comparison.original_avg_ms:.4f} ms; "
+            f"candidate avg: {benchmark_comparison.candidate_avg_ms:.4f} ms. Original peak memory: "
+            f"{benchmark_comparison.original_peak_memory_kb:.2f} KB; candidate peak memory: "
+            f"{benchmark_comparison.candidate_peak_memory_kb:.2f} KB."
+        )
 
     return normalized_code, validation
+
+
+def _tier_placeholder(tier: str) -> TieredOptimizationCandidate:
+    return TieredOptimizationCandidate(
+        tier=tier,
+        title=f"{tier}: no verified candidate found",
+        code="",
+        expected_time="Not verified",
+        expected_space="Not verified",
+        explanation=f"No verified candidate was found for {tier.lower()} under the current benchmark input.",
+        accepted=False,
+        rejection_reason=f"No verified candidate was found for {tier.lower()} under the current benchmark input.",
+    )
+
+
+def _evaluate_tiered_candidate(
+    tier: str,
+    title: str,
+    candidate: OptimizedCodeCandidate,
+    analysis: StaticAnalysisResult,
+    score: ScoreBreakdown,
+    entrypoint: str,
+    benchmark_input: str,
+    explanation: str,
+    expected_time: str,
+    expected_space: str,
+) -> TieredOptimizationCandidate:
+    optimized_code, validation = validate_optimized_candidate(
+        analysis,
+        score,
+        candidate,
+        entrypoint=entrypoint,
+        benchmark_input=benchmark_input,
+    )
+    accepted = validation.status == "accepted"
+    rejection_reason = "; ".join(validation.rejection_reasons)
+    return TieredOptimizationCandidate(
+        tier=tier,
+        title=title,
+        code=optimized_code or candidate.code,
+        expected_time=validation.candidate_time or expected_time,
+        expected_space=validation.candidate_space or expected_space,
+        explanation=explanation,
+        benchmark_comparison=validation.benchmark_comparison,
+        accepted=accepted,
+        rejection_reason="" if accepted else rejection_reason,
+    )
+
+
+def _complete_tier_set(candidates: List[TieredOptimizationCandidate]) -> List[TieredOptimizationCandidate]:
+    order = ["Quick Wins", "Medium Refactors", "Advanced Improvements"]
+    by_tier = {candidate.tier: candidate for candidate in candidates}
+    return [by_tier.get(tier, _tier_placeholder(tier)) for tier in order]
+
+
+def _build_tiered_candidates(
+    analysis: StaticAnalysisResult,
+    score: ScoreBreakdown,
+    entrypoint: str,
+    benchmark_input: str,
+) -> List[TieredOptimizationCandidate]:
+    if _detect_word_break_candidate(analysis.raw_code, entrypoint):
+        tier_specs = [
+            (
+                "Quick Wins",
+                "Quick Wins: DP cleanup and empty dictionary guard",
+                "quick",
+                "O(n^2)",
+                "O(n)",
+                (
+                    "Keeps the standard DP structure, adds the empty wordDict guard, "
+                    "and uses clearer begin/end names. Accepted only when benchmarked as no worse."
+                ),
+            ),
+            (
+                "Medium Refactors",
+                "Medium Refactor: unique word-length pruning",
+                "medium",
+                "O(n * k)",
+                "O(n + k)",
+                (
+                    "Checks only distinct dictionary word lengths. This can reduce substring checks for some "
+                    "dictionaries, but it is rejected when preprocessing overhead does not pay off."
+                ),
+            ),
+            (
+                "Advanced Improvements",
+                "Advanced Improvement: trie-index DP",
+                "advanced",
+                "O(n * L)",
+                "O(n + total dictionary characters)",
+                (
+                    "Uses a trie to walk matching prefixes from reachable indices. It uses more structure, "
+                    "so it is accepted only if benchmark data proves a runtime or memory win."
+                ),
+            ),
+        ]
+        return [
+            _evaluate_tiered_candidate(
+                tier=tier,
+                title=title,
+                candidate=OptimizedCodeCandidate(
+                    source="local",
+                    code=_word_break_code(entrypoint, variant),
+                    explanation=explanation,
+                    confidence=0.82,
+                ),
+                analysis=analysis,
+                score=score,
+                entrypoint=entrypoint,
+                benchmark_input=benchmark_input,
+                explanation=explanation,
+                expected_time=expected_time,
+                expected_space=expected_space,
+            )
+            for tier, title, variant, expected_time, expected_space, explanation in tier_specs
+        ]
+
+    local_candidate = build_local_candidate(analysis.raw_code, analysis, entrypoint)
+    candidates: List[TieredOptimizationCandidate] = []
+    if local_candidate:
+        candidates.append(
+            _evaluate_tiered_candidate(
+                tier="Medium Refactors",
+                title="Medium Refactor: best local candidate",
+                candidate=local_candidate,
+                analysis=analysis,
+                score=score,
+                entrypoint=entrypoint,
+                benchmark_input=benchmark_input,
+                explanation=local_candidate.explanation or "Validated local optimization candidate.",
+                expected_time="Estimated from candidate",
+                expected_space="Estimated from candidate",
+            )
+        )
+    return _complete_tier_set(candidates)
 
 
 def _interview_feedback(analysis: StaticAnalysisResult, score: ScoreBreakdown) -> Dict[str, str]:
@@ -828,6 +1177,7 @@ def build_optimization_plan(
     if prior_rejection_reasons and validation.status == "accepted":
         validation.rejection_reasons = list(prior_rejection_reasons) + validation.rejection_reasons
 
+    tiered_candidates = _build_tiered_candidates(analysis, score, entrypoint, benchmark_input)
     rewrite_confidence = selected_candidate.confidence if selected_candidate else 0.0
     rewrite_tests = selected_candidate.validation_tests if selected_candidate and validation.status == "accepted" else []
     candidate_steps = selected_candidate.step_by_step_plan if selected_candidate else []
@@ -905,4 +1255,5 @@ def build_optimization_plan(
         candidate_source=candidate_source,
         candidate_explanation=candidate_explanation,
         step_by_step_plan=candidate_steps,
+        tiered_candidates=tiered_candidates,
     )

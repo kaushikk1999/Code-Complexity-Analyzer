@@ -323,11 +323,24 @@ def run_benchmark(
         )
 
     if not payload.get("success"):
+        raw_error = payload.get("error", "Unknown benchmark error.")
+        helpful_error = raw_error
+
+        if "TypeError" in raw_error and definition:
+            helpful_error = (
+                f"{raw_error}\n\n"
+                f"The benchmark input was parsed successfully, but it does not match "
+                f"the runtime types expected by `{definition.callable_name}`. "
+                f"Expected argument names: {', '.join(definition.benchmark_args)}.\n\n"
+                "Try using kwargs format, for example:\n"
+                '{"kwargs": {"s": "leetcode", "wordDict": ["leet", "code"]}}'
+            )
+
         return BenchmarkResult(
             success=False,
             entrypoint=entrypoint or "<module>",
             input_description=input_description,
-            error=payload.get("error", "Unknown benchmark error."),
+            error=helpful_error,
             safety_notes=SAFETY_NOTES,
         )
 

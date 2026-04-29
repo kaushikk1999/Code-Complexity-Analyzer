@@ -1,7 +1,6 @@
 from utils.entrypoints import discover_entrypoints
 from utils.test_case_generator import generate_test_cases
 
-
 WORD_BREAK_CODE = """
 from typing import List
 
@@ -23,3 +22,20 @@ def test_generates_word_break_cases():
     assert len(cases) == 5
     assert any("leetcode" in case.benchmark_input for case in cases)
     assert any("catsandog" in case.benchmark_input for case in cases)
+
+
+def test_wordbreak_generated_cases_are_kwargs_not_two_sum_args():
+    definitions = discover_entrypoints(WORD_BREAK_CODE)
+    cases = generate_test_cases(
+        code=WORD_BREAK_CODE,
+        entrypoint="Solution.wordBreak",
+        definitions=definitions,
+    )
+
+    assert len(cases) == 5
+    assert cases[0].benchmark_input.startswith('{"kwargs"')
+    assert '"s": "leetcode"' in cases[0].benchmark_input
+    assert '"wordDict": ["leet", "code"]' in cases[0].benchmark_input
+
+    for case in cases:
+        assert "[2, 7, 11, 15" not in case.benchmark_input

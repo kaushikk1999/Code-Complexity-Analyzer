@@ -21,6 +21,7 @@ class EntrypointDefinition:
     has_varkw: bool = False
     keyword_only_args: List[str] = field(default_factory=list)
     required_keyword_only_args: List[str] = field(default_factory=list)
+    annotations: Dict[str, str] = field(default_factory=dict)
 
     @property
     def is_method(self) -> bool:
@@ -42,12 +43,28 @@ class EntrypointDefinition:
         return max(0, len(self.benchmark_args) - defaults)
 
 
+def _annotation_name(annotation: Optional[ast.AST]) -> str:
+    if annotation is None:
+        return ""
+    if isinstance(annotation, ast.Name):
+        return annotation.id
+    if isinstance(annotation, ast.Subscript):
+        return _annotation_name(annotation.value)
+    if isinstance(annotation, ast.Attribute):
+        return annotation.attr
+    return ""
+
+
 def _definition_from_function(node: ast.FunctionDef, class_name: str = "") -> Optional[EntrypointDefinition]:
     if node.name.startswith("__"):
         return None
     required_keyword_only = [
         arg.arg for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults) if default is None
     ]
+    annotations = {
+        arg.arg: _annotation_name(arg.annotation)
+        for arg in [*node.args.args, *node.args.kwonlyargs]
+    }
     return EntrypointDefinition(
         name=node.name,
         qualified_name=f"{class_name}.{node.name}" if class_name else node.name,
@@ -58,6 +75,7 @@ def _definition_from_function(node: ast.FunctionDef, class_name: str = "") -> Op
         has_varkw=node.args.kwarg is not None,
         keyword_only_args=[arg.arg for arg in node.args.kwonlyargs],
         required_keyword_only_args=required_keyword_only,
+        annotations=annotations,
     )
 
 
@@ -153,6 +171,28 @@ def missing_entrypoint_message(entrypoint: str, definitions: List[EntrypointDefi
     )
 
 
+def _value_matches_annotation(value: Any, annotation: str) -> bool:
+    if not annotation:
+        return True
+
+    normalized = annotation.lower()
+
+    if normalized == "str":
+        return isinstance(value, str)
+    if normalized == "int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if normalized == "bool":
+        return isinstance(value, bool)
+    if normalized in {"list", "sequence"}:
+        return isinstance(value, list)
+    if normalized == "dict":
+        return isinstance(value, dict)
+    if normalized == "set":
+        return isinstance(value, set)
+
+    return True
+
+
 def validate_call_arguments(
     definition: EntrypointDefinition,
     args: Tuple[Any, ...],
@@ -191,6 +231,26 @@ def validate_call_arguments(
         return (
             f"Benchmark input has unexpected keyword argument(s): {', '.join(unknown_kwargs)}. "
             f"{benchmark_input_hint(definition)}"
+        )
+
+    provided_values: Dict[str, Any] = {}
+    for index, value in enumerate(args):
+        if index < len(positional_names):
+            provided_values[positional_names[index]] = value
+    provided_values.update(kwargs)
+
+    type_errors = []
+    for name, value in provided_values.items():
+        annotation = definition.annotations.get(name, "")
+        if annotation and not _value_matches_annotation(value, annotation):
+            type_errors.append(f"{name} expected {annotation}, got {type(value).__name__}")
+
+    if type_errors:
+        return (
+            "Benchmark input type mismatch: "
+            + "; ".join(type_errors)
+            + ". "
+            + benchmark_input_hint(definition)
         )
     return ""
 

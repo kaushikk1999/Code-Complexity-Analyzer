@@ -164,7 +164,7 @@ def test_algorithm_planner_reuses_sidebar_gemini_key_input():
 
     assert '"Gemini API Key"' not in planner_body
     assert "st.text_input(" not in planner_body
-    assert "pending_gemini_api_key" in planner_body
+    assert "_resolve_gemini_key_for_action" in planner_body
     assert "_queue_gemini_submit" in planner_body
     assert "key=_gemini_key_widget_key()" in app_source
     assert 'st.session_state.gemini_api_key = ""' in app_source

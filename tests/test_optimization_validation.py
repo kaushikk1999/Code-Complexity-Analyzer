@@ -85,12 +85,11 @@ def test_optimal_iterative_binary_search_gets_reference_suggestion_and_plan_step
 
     plan = build_optimization_plan(analysis, score, entrypoint="binary_search")
 
-    assert plan.validation.status == "accepted"
-    assert plan.validation.accepted_reason.startswith("The current approach is already asymptotically optimal")
+    assert plan.validation.status == "rejected"
+    assert any("does not improve" in reason for reason in plan.validation.rejection_reasons)
     assert plan.validation.candidate_time == "O(log n)"
     assert plan.validation.candidate_space == "O(1)"
-    assert "def binary_search(arr, target):" in plan.optimized_code
-    assert "while left <= right:" in plan.optimized_code
+    assert plan.optimized_code is None
     assert plan.quick_wins
     assert plan.medium_refactors
     assert plan.advanced_improvements
@@ -110,7 +109,7 @@ def test_same_quality_candidate_is_rejected():
 
     assert optimized_code is None
     assert validation.status == "rejected"
-    assert any("did not improve" in reason for reason in validation.rejection_reasons)
+    assert any("does not improve" in reason for reason in validation.rejection_reasons)
 
 
 def test_generated_candidate_is_renamed_to_configured_entrypoint():

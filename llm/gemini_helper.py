@@ -228,6 +228,9 @@ def generate_optimized_code_with_gemini(
         "local_plan_summary": plan.summary,
         "previous_rejection_reasons": rejection_reasons or [],
     }
+    previous_rejection_reasons = "\n".join(f"- {reason}" for reason in (rejection_reasons or []))
+    if not previous_rejection_reasons:
+        previous_rejection_reasons = "- None"
     prompt = f"""
 You generate optimized Python code for an interview-prep complexity analyzer.
 Return JSON only. No Markdown wrapper.
@@ -248,16 +251,24 @@ Rules:
 - For LeetCode-style code, keep the class wrapper.
 - Keep the same method arguments and return type behavior.
 - Keep the function callable with the same benchmark input shape.
-- Generate the best practical version of the code.
-- Prefer the lowest possible time complexity.
-- If the current code is already asymptotically optimal, still return a cleaner, simpler, edge-case-safe reference implementation with the same function name.
-- Prefer the lowest possible auxiliary space only when it does not worsen time complexity.
-- Use data structures when they reduce asymptotic time or simplify correctness.
+- Generate the simplest correct code that improves or preserves the public behavior.
+- Prefer lower time complexity first.
+- Prefer lower auxiliary space second.
+- Do not add extra data structures unless they reduce time complexity or benchmark runtime.
+- Do not sort or precompute helper structures unless they are necessary or likely to improve runtime.
+- If the current code is already close to optimal, return a minimal cleanup only.
+- The candidate will be rejected if static score decreases, estimated time worsens, estimated space worsens, benchmark runtime is worse, benchmark peak memory is worse, or code is more complex without measured benefit.
+- You must generate a candidate that is strictly better by at least one of: lower estimated time complexity, lower estimated space complexity, higher optimization score without worse time/space, lower measured runtime on the benchmark input without higher memory, or lower measured memory without higher runtime.
+- If no better candidate exists, return the original algorithm cleaned only if it is not slower, not higher memory, and not lower score.
 - Add edge-case handling when it does not change the required return contract.
+- Return validation tests covering edge cases.
 - Do not import filesystem, process, network, introspection, or dynamic execution modules.
 - Do not call open, eval, exec, compile, input, getattr, setattr, globals, locals, or __import__.
 - If previous rejection reasons are listed, correct them.
 - Return only one candidate.
+
+The previous candidate was rejected for these reasons:
+{previous_rejection_reasons}
 
 Local facts:
 ```json

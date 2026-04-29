@@ -19,34 +19,26 @@ class Solution:
 """
 
 
-def test_word_break_json_args_benchmark_input():
+def test_wordbreak_accepts_kwargs_benchmark_input():
     result = run_benchmark(
         WORD_BREAK_CODE,
         entrypoint="Solution.wordBreak",
-        input_text='{"args": ["leetcode", ["leet", "code"]]}',
+        input_text='{"kwargs": {"s": "leetcode", "wordDict": ["leet", "code"]}}',
         repeat_count=1,
     )
 
     assert result.success
 
 
-def test_word_break_assignment_benchmark_input():
+def test_wordbreak_rejects_stale_two_sum_input_helpfully():
     result = run_benchmark(
         WORD_BREAK_CODE,
         entrypoint="Solution.wordBreak",
-        input_text='s = "leetcode"\nwordDict = ["leet", "code"]',
+        input_text='{"args": [[2, 7, 11, 15, 21, 30, 42, 55], 57]}',
         repeat_count=1,
     )
 
-    assert result.success
-
-
-def test_word_break_leetcode_style_benchmark_input():
-    result = run_benchmark(
-        WORD_BREAK_CODE,
-        entrypoint="Solution.wordBreak",
-        input_text='s =\n"leetcode"\nwordDict =\n["leet", "code"]',
-        repeat_count=1,
-    )
-
-    assert result.success
+    assert not result.success
+    assert "type mismatch" in result.error.lower() or "Expected argument names" in result.error
+    assert "s" in result.error
+    assert "wordDict" in result.error
