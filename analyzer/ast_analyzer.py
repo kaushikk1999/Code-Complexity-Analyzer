@@ -12,6 +12,7 @@ from analyzer.advanced_patterns import (
     detect_algorithm_patterns,
     finding,
     infer_container_type,
+    is_word_break_ii_pattern,
 )
 from analyzer.anti_patterns import build_optimization_targets, detect_anti_patterns
 from analyzer.complexity_rules import (
@@ -20,7 +21,7 @@ from analyzer.complexity_rules import (
     estimate_time_complexity,
     max_complexity,
 )
-from analyzer.models import FunctionAnalysis, LineFinding, StaticAnalysisResult
+from analyzer.models import AlgorithmPattern, FunctionAnalysis, LineFinding, StaticAnalysisResult
 
 EXPENSIVE_CALLS = {"sum", "min", "max", "sorted", "list", "tuple", "set", "any", "all"}
 DATA_PROCESSING_CALLS = {"append", "extend", "sum", "mean", "apply", "map", "filter"}
@@ -619,6 +620,29 @@ def analyze_code(code: str) -> StaticAnalysisResult:
         anti_patterns.extend(function.anti_patterns)
         line_findings.extend(function.line_findings)
         algorithm_patterns.extend(function.algorithm_patterns)
+
+    if is_word_break_ii_pattern(code):
+        output_caveat = (
+            "Word Break II / sentence generation detected. Runtime and memory are output-sensitive "
+            "because the function may return exponentially many sentences."
+        )
+        caveats.append(output_caveat)
+        evidence.append("Detected Word Break II sentence-generation DFS with memoization and appended results.")
+        metrics["word_break_ii_output_sensitive"] = 1
+        metrics["output_sensitive"] = 1
+        estimated_time = "O(k*n)"
+        estimated_space = "O(k*n)"
+        algorithm_patterns.append(
+            AlgorithmPattern(
+                name="Word Break II / sentence generation",
+                confidence=0.92,
+                evidence=["wordBreak entrypoint", "DFS", "memoization", "sentence result append"],
+                interview_note=(
+                    "This problem is output-sensitive. No algorithm can avoid producing all returned sentences; "
+                    "optimize pruning, memoization, and avoid unnecessary work without claiming impossible lower complexity."
+                ),
+            )
+        )
 
     caveats = list(dict.fromkeys(caveats))
     if len(functions) > 1:

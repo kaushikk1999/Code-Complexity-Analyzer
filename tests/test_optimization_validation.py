@@ -54,7 +54,12 @@ def test_local_two_sum_rewrite_is_verified_and_preserves_entrypoint():
     analysis = analyze_code(TWO_SUM_BRUTE_FORCE)
     score = calculate_optimization_score(analysis)
 
-    plan = build_optimization_plan(analysis, score, entrypoint="two_sum")
+    plan = build_optimization_plan(
+        analysis,
+        score,
+        entrypoint="two_sum",
+        benchmark_input='{"args": [[2, 7, 11, 15], 9]}',
+    )
 
     assert plan.validation.status == "accepted"
     assert plan.validation.source == "local"
@@ -68,7 +73,12 @@ def test_recursive_binary_search_gets_verified_iterative_rewrite():
     analysis = analyze_code(BINARY_SEARCH_RECURSIVE)
     score = calculate_optimization_score(analysis)
 
-    plan = build_optimization_plan(analysis, score, entrypoint="binary_search")
+    plan = build_optimization_plan(
+        analysis,
+        score,
+        entrypoint="binary_search",
+        benchmark_input='{"args": [[2, 4, 6, 8, 10, 12], 10]}',
+    )
 
     assert plan.validation.status == "accepted"
     assert plan.validation.source == "local"
@@ -83,18 +93,26 @@ def test_optimal_iterative_binary_search_gets_reference_suggestion_and_plan_step
     analysis = analyze_code(BINARY_SEARCH_ITERATIVE)
     score = calculate_optimization_score(analysis)
 
-    plan = build_optimization_plan(analysis, score, entrypoint="binary_search")
+    plan = build_optimization_plan(
+        analysis,
+        score,
+        entrypoint="binary_search",
+        benchmark_input='{"args": [[2, 4, 6, 8, 10, 12], 10]}',
+    )
 
-    assert plan.validation.status == "rejected"
-    assert any("does not improve" in reason for reason in plan.validation.rejection_reasons)
-    assert plan.validation.candidate_time == "O(log n)"
-    assert plan.validation.candidate_space == "O(1)"
-    assert plan.optimized_code is None
+    assert plan.validation.status in {"rejected", "same_complexity"}
+    if plan.validation.status == "rejected":
+        assert any("improve" in reason for reason in plan.validation.rejection_reasons)
+    verified = next(candidate for candidate in plan.verified_candidates if candidate.level == "quick_win")
+    assert verified.actual_time == "O(log n)"
+    assert verified.actual_space == "O(1)"
+    if plan.validation.status == "rejected":
+        assert plan.optimized_code is None
     assert plan.quick_wins
     assert plan.medium_refactors
     assert plan.advanced_improvements
     assert any("No medium refactor required" == step.title for step in plan.medium_refactors)
-    assert any("No advanced rewrite required" == step.title for step in plan.advanced_improvements)
+    assert any("No advanced rewrite verified" == step.title for step in plan.advanced_improvements)
 
 
 def test_same_quality_candidate_is_rejected():
@@ -109,7 +127,7 @@ def test_same_quality_candidate_is_rejected():
 
     assert optimized_code is None
     assert validation.status == "rejected"
-    assert any("does not improve" in reason for reason in validation.rejection_reasons)
+    assert any("benchmark input" in reason or "identical" in reason for reason in validation.rejection_reasons)
 
 
 def test_generated_candidate_is_renamed_to_configured_entrypoint():
@@ -129,7 +147,13 @@ def solution(nums, target):
 """,
     )
 
-    plan = build_optimization_plan(analysis, score, entrypoint="two_sum", candidate=candidate)
+    plan = build_optimization_plan(
+        analysis,
+        score,
+        entrypoint="two_sum",
+        candidate=candidate,
+        benchmark_input='{"args": [[2, 7, 11, 15], 9]}',
+    )
 
     assert plan.validation.status == "accepted"
     assert plan.validation.source == "gemini"

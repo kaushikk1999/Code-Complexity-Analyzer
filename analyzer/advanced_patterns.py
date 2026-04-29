@@ -31,6 +31,18 @@ def safe_unparse(node: ast.AST) -> str:
         return node.__class__.__name__
 
 
+def is_word_break_ii_pattern(code: str) -> bool:
+    lowered = (code or "").lower()
+    compact = lowered.replace(" ", "")
+    return (
+        "wordbreak" in lowered
+        and ("list[str]" in compact or "list[str]" in compact.replace("typing.", ""))
+        and "dfs" in lowered
+        and "memo" in lowered
+        and ("res.append" in lowered or "sentences.append" in lowered or ".append" in lowered)
+    )
+
+
 class FunctionCatalog(ast.NodeVisitor):
     """Collect function call graph and simple assignment data-flow hints."""
 

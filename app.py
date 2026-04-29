@@ -29,9 +29,8 @@ from llm import (
 from optimization import (
     OptimizationPlan,
     OptimizationStep,
-    OptimizedCodeCandidate,
     build_optimization_plan,
-    validate_optimized_candidate,
+    generate_verified_optimization_candidates,
 )
 from scoring import ScoreBreakdown, calculate_optimization_score
 from utils.constants import (
@@ -183,15 +182,10 @@ def _resolve_gemini_key_for_action(source: str, fallback_key: str = "") -> Optio
         st.session_state.gemini_key_requested = False
         return api_key
 
-    if st.session_state.get("gemini_prompt_decision") not in {"declined"}:
-        st.session_state.gemini_key_requested = True
-        _gemini_key_dialog(source)
-        return None
-
     st.warning(
-        "Continuing without Gemini. Complexity Lab will use its local optimizer, "
-        "but Gemini can often generate broader rewrite candidates. Any candidate is still "
-        "locally analyzed and benchmarked before it is shown."
+        "For broader optimization search, add a Gemini API key. Gemini can explore more algorithmic rewrites "
+        "and edge-case-safe variants. If you continue without it, Complexity Lab will use its local deterministic "
+        "optimizer and only display code that passes validation."
     )
     return ""
 
@@ -244,8 +238,10 @@ def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
 
 def _analyze_current(
     benchmark: Optional[BenchmarkResult] = None,
-    candidate: Optional[OptimizedCodeCandidate] = None,
     prior_rejection_reasons: Optional[List[str]] = None,
+    generate_candidates: bool = False,
+    candidate_provider=None,
+    api_key: str = "",
 ) -> None:
     code = st.session_state.editor_code
     _sync_entrypoint_with_code(update_state=True)
@@ -265,9 +261,11 @@ def _analyze_current(
         analysis,
         score,
         entrypoint=st.session_state.entrypoint,
-        candidate=candidate,
         prior_rejection_reasons=prior_rejection_reasons,
         benchmark_input=_validation_benchmark_input(),
+        generate_candidates=generate_candidates,
+        candidate_provider=candidate_provider,
+        api_key=api_key,
     )
     st.session_state.analysis = analysis
     st.session_state.score = score
@@ -370,14 +368,12 @@ def _generate_gemini_feedback(api_key: str) -> None:
 
 def _build_verified_optimization_plan(api_key: str) -> None:
     st.session_state.gemini_text = None
-    benchmark = st.session_state.benchmark
     if st.session_state.static_only_mode:
-        benchmark = None
         st.session_state.benchmark = None
         st.info("Static-only mode is enabled, so Generate Optimization Plan skipped automatic benchmarking.")
         _analyze_current(None)
     else:
-        benchmark = _run_benchmark()
+        _run_benchmark()
 
     analysis = st.session_state.analysis
     score = st.session_state.score
@@ -385,58 +381,42 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     if not analysis or not score or not seed_plan:
         return
 
-    if not api_key:
-        st.info(
-            "No Gemini API key was provided. For broader code generation and deeper optimization, "
-            "add a Gemini API key in the sidebar. For now, Complexity Lab will use its local "
-            "deterministic optimizer and only show code that passes local validation."
-        )
-        _analyze_current(benchmark)
-        return
+    candidate_provider = None
+    if api_key:
+        def candidate_provider(level: str, rejection_reasons: List[str]):
+            return generate_optimized_code_with_gemini(
+                api_key=api_key,
+                code=st.session_state.editor_code,
+                analysis=analysis,
+                score=score,
+                plan=seed_plan,
+                entrypoint=st.session_state.entrypoint,
+                level=level,
+                retry_count=0,
+                rejection_reasons=rejection_reasons,
+            )
 
-    gemini_errors: List[str] = []
-    rejection_reasons: List[str] = []
-    accepted_candidate: Optional[OptimizedCodeCandidate] = None
-    for retry_count in range(3):
-        candidate, error = generate_optimized_code_with_gemini(
-            api_key=api_key,
-            code=st.session_state.editor_code,
-            analysis=analysis,
-            score=score,
-            plan=seed_plan,
-            entrypoint=st.session_state.entrypoint,
-            retry_count=retry_count,
-            rejection_reasons=rejection_reasons,
-        )
-        if error:
-            gemini_errors.append(error)
-            break
-        _, validation = validate_optimized_candidate(
-            analysis,
-            score,
-            candidate,
-            entrypoint=st.session_state.entrypoint,
-            benchmark_input=_validation_benchmark_input(),
-        )
-        if validation.status == "accepted":
-            accepted_candidate = candidate
-            break
-        rejection_reasons = validation.rejection_reasons
-
-    _analyze_current(
-        benchmark,
-        candidate=accepted_candidate,
-        prior_rejection_reasons=gemini_errors + rejection_reasons,
+    plan = generate_verified_optimization_candidates(
+        original_code=st.session_state.editor_code,
+        analysis=analysis,
+        score=score,
+        entrypoint=st.session_state.entrypoint,
+        benchmark_input=_validation_benchmark_input(),
+        api_key=api_key,
+        plan=seed_plan,
+        candidate_provider=candidate_provider,
+        repeat_count=st.session_state.repeat_count,
+        timeout_seconds=st.session_state.timeout_seconds,
     )
-    plan = st.session_state.plan
-    if plan and accepted_candidate and plan.validation.status == "accepted":
-        st.session_state.gemini_text = plan.candidate_explanation or "Gemini generated the accepted optimized code candidate."
-    elif gemini_errors or rejection_reasons:
-        st.session_state.gemini_text = (
-            "Gemini did not produce an accepted optimized rewrite. "
-            "The app fell back to the validated local optimizer.\n\n"
-            + "\n".join(f"- {item}" for item in (gemini_errors + rejection_reasons))
-        )
+    st.session_state.plan = plan
+
+    if plan.generation_notes:
+        st.warning("Gemini candidate generation failed. Falling back to local verified optimizer.")
+        st.session_state.gemini_text = "\n".join(f"- {note}" for note in plan.generation_notes)
+    elif api_key:
+        gemini_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "gemini"]
+        if gemini_candidates:
+            st.session_state.gemini_text = "Gemini generated level-specific candidates that were locally analyzed and benchmarked."
 
 
 def _save_current_record() -> None:
@@ -803,31 +783,58 @@ def _render_optimization_tab(
                 st.write(f"- {reason}")
 
     st.subheader("Verified Optimization Candidates")
-    if plan.tiered_candidates:
-        tier_columns = st.columns(3)
-        for column, candidate in zip(tier_columns, plan.tiered_candidates):
-            with column:
-                st.markdown(f"##### {candidate.tier}")
-                expander_title = candidate.title.replace(f"{candidate.tier}: ", "")
-                with st.expander(expander_title, expanded=candidate.accepted):
+    level_titles = {
+        "quick_win": "Quick Win Candidate",
+        "medium_refactor": "Medium Refactor Candidate",
+        "advanced": "Advanced Candidate",
+    }
+    if plan.verified_candidates:
+        rows = []
+        for candidate in plan.verified_candidates:
+            reason = candidate.acceptance_reason or "; ".join(candidate.rejection_reasons)
+            rows.append(
+                {
+                    "Level": level_titles.get(candidate.level, candidate.level),
+                    "Status": candidate.status.replace("_", " ").title(),
+                    "Avg Runtime": f"{candidate.benchmark_avg_ms:.4f} ms" if candidate.benchmark_avg_ms else "Not measured",
+                    "Peak Memory": f"{candidate.benchmark_peak_kb:.2f} KB" if candidate.benchmark_peak_kb else "Not measured",
+                    "Estimated Time": candidate.actual_time or candidate.expected_time,
+                    "Estimated Space": candidate.actual_space or candidate.expected_space,
+                    "Reason": reason or "No verification result.",
+                }
+            )
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+        for candidate in plan.verified_candidates:
+            with st.expander(level_titles.get(candidate.level, candidate.title), expanded=candidate.status in {"accepted", "same_complexity"}):
+                status_text = candidate.status.replace("_", " ").title()
+                if candidate.status in {"accepted", "same_complexity"}:
+                    st.success(status_text)
+                    st.write(candidate.acceptance_reason)
+                elif candidate.status == "not_generated":
+                    st.info("Not generated")
+                else:
+                    st.warning("Rejected")
+                if candidate.explanation:
                     st.write(candidate.explanation)
-                    st.write(f"Expected time: `{candidate.expected_time}`")
-                    st.write(f"Expected space: `{candidate.expected_space}`")
-                    if candidate.benchmark_comparison:
-                        comparison = candidate.benchmark_comparison
-                        st.write(
-                            f"Original avg: {comparison.original_avg_ms:.4f} ms; "
-                            f"Candidate avg: {comparison.candidate_avg_ms:.4f} ms"
-                        )
-                        st.write(
-                            f"Original peak memory: {comparison.original_peak_memory_kb:.2f} KB; "
-                            f"Candidate peak memory: {comparison.candidate_peak_memory_kb:.2f} KB"
-                        )
-                    if candidate.accepted:
-                        st.success("Accepted")
-                        st.code(candidate.code, language="python")
-                    else:
-                        st.warning(candidate.rejection_reason or "Rejected because it did not beat the original.")
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Candidate avg", f"{candidate.benchmark_avg_ms:.4f} ms" if candidate.benchmark_avg_ms else "Not measured")
+                metric_cols[1].metric("Candidate peak", f"{candidate.benchmark_peak_kb:.2f} KB" if candidate.benchmark_peak_kb else "Not measured")
+                metric_cols[2].metric("Actual time", candidate.actual_time or candidate.expected_time)
+                metric_cols[3].metric("Actual space", candidate.actual_space or candidate.expected_space)
+                st.write(f"Expected time: `{candidate.expected_time}`")
+                st.write(f"Expected space: `{candidate.expected_space}`")
+                if candidate.original_avg_ms:
+                    st.caption(
+                        f"Original avg: {candidate.original_avg_ms:.4f} ms; "
+                        f"original peak memory: {candidate.original_peak_kb:.2f} KB"
+                    )
+                if candidate.rejection_reasons:
+                    st.write("Rejection reason:")
+                    for reason in candidate.rejection_reasons:
+                        st.write(f"- {reason}")
+                if candidate.code:
+                    st.code(candidate.code, language="python")
     else:
         st.info("No verified optimization candidates were generated for the current code.")
 
@@ -866,9 +873,11 @@ def _render_optimization_tab(
         st.code(analysis.raw_code, language="python")
     with after:
         st.caption("Suggested")
-        if plan.optimized_code and plan.validation.status == "accepted":
+        if plan.optimized_code and plan.validation.status in {"accepted", "same_complexity"}:
             st.caption(f"Source: {plan.validation.source.title()}")
             st.caption(f"Safe rewrite confidence: {int(plan.safe_rewrite_confidence * 100)}%")
+            if plan.validation.status == "same_complexity":
+                st.caption("Same-complexity reference implementation")
             st.code(plan.optimized_code, language="python")
         else:
             st.info(

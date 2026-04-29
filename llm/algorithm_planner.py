@@ -8,8 +8,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from analyzer import analyze_code
 from benchmarking import run_benchmark
 from benchmarking.sandbox import validate_code_for_execution
+from optimization.planner import generate_verified_optimization_candidates
+from scoring import calculate_optimization_score
 
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 GEMINI_MODEL_FALLBACKS = (
@@ -440,6 +443,26 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
         return result
 
     result.runtime = benchmark_planner_solution(code, entrypoint, test_cases)
+    if entrypoint and test_cases:
+        analysis = analyze_code(code)
+        if analysis.valid:
+            score = calculate_optimization_score(analysis)
+            verified_plan = generate_verified_optimization_candidates(
+                original_code=code,
+                analysis=analysis,
+                score=score,
+                entrypoint=entrypoint,
+                benchmark_input=test_cases[0].input_text,
+            )
+            if verified_plan.best_candidate:
+                result.final_optimized_python_code = verified_plan.best_candidate.code
+                result.time_complexity = verified_plan.best_candidate.actual_time or result.time_complexity
+                result.space_complexity = verified_plan.best_candidate.actual_space or result.space_complexity
+                result.step_by_step_optimization_plan.extend(
+                    [
+                        f"{verified_plan.best_candidate.title}: {verified_plan.best_candidate.acceptance_reason}",
+                    ]
+                )
     return result
 
 

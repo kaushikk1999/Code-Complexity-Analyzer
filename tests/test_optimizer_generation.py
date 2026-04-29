@@ -21,7 +21,6 @@ def two_sum(nums, target):
     plan = build_optimization_plan(analysis, score, entrypoint="two_sum")
 
     assert plan.optimized_code is None
-    assert plan.validation.status == "rejected"
-    assert plan.validation.candidate_time == analysis.estimated_time
-    assert plan.validation.candidate_space == analysis.estimated_space
-    assert any("does not improve" in reason for reason in plan.validation.rejection_reasons)
+    assert plan.validation.status == "not_generated"
+    assert plan.validation.original_time == analysis.estimated_time
+    assert plan.validation.original_space == analysis.estimated_space

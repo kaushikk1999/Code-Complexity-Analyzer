@@ -204,6 +204,7 @@ def generate_optimized_code_with_gemini(
     score: ScoreBreakdown,
     plan: OptimizationPlan,
     entrypoint: str,
+    level: str = "medium_refactor",
     retry_count: int = 0,
     rejection_reasons: Optional[list] = None,
 ) -> tuple[Optional[OptimizedCodeCandidate], Optional[str]]:
@@ -215,8 +216,39 @@ def generate_optimized_code_with_gemini(
     """
     if not api_key:
         return None, "Gemini API key was not provided."
+    level_titles = {
+        "quick_win": "Quick Win",
+        "medium_refactor": "Medium Refactor",
+        "advanced": "Advanced Improvement",
+    }
+    level_rules = {
+        "quick_win": [
+            "Level: Quick Win",
+            "Generate the simplest safe cleanup.",
+            "Do not change the algorithm unless clearly beneficial.",
+            "Prioritize readability, edge cases, and avoiding obvious repeated work.",
+            "The code must be short and interview-friendly.",
+        ],
+        "medium_refactor": [
+            "Level: Medium Refactor",
+            "Use better pruning, precomputation, and data structures when useful.",
+            "Reduce avoidable loops, slicing, or repeated membership checks.",
+            "Keep the code understandable.",
+        ],
+        "advanced": [
+            "Level: Advanced Improvement",
+            "Generate the fastest practical implementation for the same contract.",
+            "Minimize runtime first, then peak memory.",
+            "Use advanced algorithmic pruning or memoization if valid.",
+            "Do not change return type or semantics.",
+        ],
+    }
+    level = level if level in level_rules else "medium_refactor"
+    level_rule_lines = "\n".join(f"- {rule}" for rule in level_rules[level])
+    output_sensitive = bool(analysis.metrics.get("output_sensitive") or analysis.metrics.get("word_break_ii_output_sensitive"))
     facts = {
         "entrypoint": entrypoint,
+        "requested_level": level_titles[level],
         "estimated_time": analysis.estimated_time,
         "estimated_space": analysis.estimated_space,
         "confidence": analysis.confidence,
@@ -226,6 +258,7 @@ def generate_optimized_code_with_gemini(
         "algorithm_patterns": [item.__dict__ for item in analysis.algorithm_patterns[:5]],
         "line_findings": [item.__dict__ for item in analysis.line_findings[:8]],
         "local_plan_summary": plan.summary,
+        "output_sensitive": output_sensitive,
         "previous_rejection_reasons": rejection_reasons or [],
     }
     previous_rejection_reasons = "\n".join(f"- {reason}" for reason in (rejection_reasons or []))
@@ -247,6 +280,8 @@ Required JSON shape:
 
 Rules:
 - Preserve the configured entrypoint exactly: {entrypoint!r}.
+- Generate exactly one {level_titles[level]} candidate.
+{level_rule_lines}
 - If the entrypoint contains a dot, such as "Solution.singleNumber", return the same class name and method name.
 - For LeetCode-style code, keep the class wrapper.
 - Keep the same method arguments and return type behavior.
@@ -264,6 +299,7 @@ Rules:
 - Return validation tests covering edge cases.
 - Do not import filesystem, process, network, introspection, or dynamic execution modules.
 - Do not call open, eval, exec, compile, input, getattr, setattr, globals, locals, or __import__.
+- If the problem is output-sensitive, do not claim lower than output-size complexity. Optimize search overhead and memory use only.
 - If previous rejection reasons are listed, correct them.
 - Return only one candidate.
 
@@ -304,6 +340,10 @@ Original code:
         source="gemini",
         code=optimized_code,
         explanation=str(payload.get("explanation", "")).strip(),
+        level=level,
+        title=level_titles[level],
+        expected_time=str(payload.get("expected_time", "")).strip(),
+        expected_space=str(payload.get("expected_space", "")).strip(),
         step_by_step_plan=[str(item) for item in steps if str(item).strip()],
         validation_tests=[str(item) for item in tests if str(item).strip()],
         confidence=0.72,

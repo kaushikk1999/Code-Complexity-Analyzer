@@ -1,6 +1,7 @@
 from analyzer import analyze_code
+from benchmarking.metrics import BenchmarkResult, BenchmarkRun, summarize_runs
 from optimization import planner
-from optimization.planner import CandidateBenchmarkComparison, OptimizedCodeCandidate
+from optimization.planner import OptimizedCodeCandidate
 from scoring import calculate_optimization_score
 
 WORD_BREAK_ORIGINAL = """
@@ -71,26 +72,27 @@ def test_rejects_lower_score_same_complexity_candidate():
 
 
 def test_candidate_benchmark_must_not_be_slower(monkeypatch):
-    def fake_compare_candidate_benchmark(*args, **kwargs):
-        return CandidateBenchmarkComparison(
-            original_success=True,
-            candidate_success=True,
-            original_avg_ms=1.0,
-            candidate_avg_ms=1.2,
-            original_peak_memory_kb=1.0,
-            candidate_peak_memory_kb=1.0,
-            runtime_ratio=1.2,
-            memory_ratio=1.0,
+    def fake_result(avg_ms: float) -> BenchmarkResult:
+        runs = [BenchmarkRun(run_index=1, runtime_ms=avg_ms, current_memory_kb=0.0, peak_memory_kb=1.0)]
+        return BenchmarkResult(
+            success=True,
+            entrypoint="total",
+            input_description="fake",
+            runs=runs,
+            summary=summarize_runs(runs),
         )
 
-    monkeypatch.setattr(planner, "compare_candidate_benchmark", fake_compare_candidate_benchmark)
+    def fake_benchmark_candidate(*args, **kwargs):
+        return fake_result(1.0), fake_result(1.2)
 
-    code = "def total(values):\n    return sum(values)\n"
+    monkeypatch.setattr(planner, "benchmark_candidate", fake_benchmark_candidate)
+
+    code = "def total(values):\n    result = 0\n    for value in values:\n        result += value\n    return result\n"
     analysis = analyze_code(code)
     score = calculate_optimization_score(analysis)
     candidate = OptimizedCodeCandidate(
         source="gemini",
-        code=code,
+        code="def total(values):\n    acc = 0\n    for value in values:\n        acc += value\n    return acc\n",
         explanation="Same static quality but slower in benchmark.",
         confidence=0.90,
     )
@@ -104,4 +106,4 @@ def test_candidate_benchmark_must_not_be_slower(monkeypatch):
     )
 
     assert validation.status == "rejected"
-    assert any("runtime is worse" in reason for reason in validation.rejection_reasons)
+    assert any("did not improve" in reason for reason in validation.rejection_reasons)

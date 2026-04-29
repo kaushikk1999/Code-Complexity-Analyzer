@@ -15,11 +15,14 @@ COMPLEXITY_ORDER = {
     "O(n)": 2,
     "O(n log n)": 3,
     "O(n^2)": 4,
-    "O(n^2 log n)": 5,
-    "O(n^3)": 6,
-    "O(2^n)": 7,
-    "O(n!)": 8,
-    "Unknown": 9,
+    "O(k*n)": 5,
+    "Output-sensitive": 5,
+    "O(output_size * n)": 5,
+    "O(n^2 log n)": 6,
+    "O(n^3)": 7,
+    "O(2^n)": 8,
+    "O(n!)": 9,
+    "Unknown": 10,
 }
 
 
