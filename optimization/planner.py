@@ -1042,16 +1042,20 @@ def candidate_is_better(
     candidate_space_rank: int,
 ) -> tuple[bool, str]:
     time_complexity_better = candidate_time_rank < original_time_rank
+    time_complexity_not_worse = candidate_time_rank <= original_time_rank
     space_complexity_better = candidate_space_rank < original_space_rank
     runtime_better = candidate_avg_ms > 0 and original_avg_ms > 0 and candidate_avg_ms <= original_avg_ms * 0.95
     memory_better = candidate_peak_kb > 0 and original_peak_kb > 0 and candidate_peak_kb <= original_peak_kb * 0.95
     score_not_worse = candidate_score >= original_score
     runtime_not_worse = candidate_avg_ms <= original_avg_ms * 1.05
     memory_not_worse = candidate_peak_kb <= original_peak_kb * 1.10
+    tiny_runtime_delta = abs(candidate_avg_ms - original_avg_ms) <= 0.01
 
     if time_complexity_better:
         return True, "Accepted because estimated time complexity improved."
-    if space_complexity_better and runtime_not_worse:
+    if space_complexity_better and (
+        runtime_not_worse or (time_complexity_not_worse and score_not_worse and tiny_runtime_delta)
+    ):
         return True, "Accepted because estimated space complexity improved without worse runtime."
     if runtime_better and memory_not_worse and score_not_worse:
         return True, "Accepted because benchmark runtime improved without worse memory or score."

@@ -116,7 +116,7 @@ Install developer dependencies and run tests:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest
+python -m pytest
 ```
 
 Optional local quality checks:
