@@ -106,15 +106,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install dependencies:
+Install runtime dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run tests:
+Install developer dependencies and run tests:
 
 ```bash
+pip install -r requirements-dev.txt
 pytest
 ```
 
@@ -137,20 +138,22 @@ Open the local URL Streamlit prints in your terminal.
 
 1. Push this project to GitHub.
 2. Create a new Streamlit app from the repository.
-3. Set the main file path to `streamlit_app.py` or `app.py`.
-4. Ensure `requirements.txt` is in the repository root.
-5. In Advanced settings, choose Python 3.11 for the closest match to CI.
-6. Deploy.
+3. Set the main file path to `streamlit_app.py`.
+4. Keep the branch set to the branch you want to deploy.
+5. Ensure `requirements.txt` is in the repository root.
+6. In Advanced settings, choose Python 3.12 for the closest match to Streamlit Community Cloud's default runtime. Python 3.11 is also covered by CI.
+7. Deploy.
 
 Deployment-ready files included in this repository:
 
 - `streamlit_app.py`: conventional Streamlit Cloud entrypoint.
 - `app.py`: main application.
-- `requirements.txt`: Python dependencies.
+- `requirements.txt`: runtime Python dependencies for Streamlit Cloud.
+- `requirements-dev.txt`: local and CI-only test/lint/type-check dependencies.
 - `.streamlit/config.toml`: Streamlit theme configuration.
 - `data/.gitkeep`: keeps the local history directory available while excluding runtime SQLite data.
 
-No Node.js build, frontend server, paid API key, or Linux `packages.txt` file is required.
+No Node.js build, frontend server, paid API key, `runtime.txt`, or Linux `packages.txt` file is required.
 
 For public deployments, enable `Static-only public mode` in the sidebar when demonstrating with untrusted code. This disables benchmark execution while preserving static analysis, scoring, reports, and interview coaching.
 

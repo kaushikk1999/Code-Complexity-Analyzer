@@ -1186,6 +1186,13 @@ def _verify_candidate_for_level(
             )
         return verified
 
+    if (
+        _detect_iterative_binary_search_candidate(original_analysis)
+        and candidate_time_rank == original_time_rank
+        and candidate_space_rank == original_space_rank
+    ):
+        reason = "Accepted as a same-or-better clean reference implementation."
+
     verified.acceptance_reason = reason
     verified.status = "same_complexity" if "same-or-better clean reference" in reason else "accepted"
     return verified
