@@ -47,7 +47,7 @@ from utils.entrypoints import choose_entrypoint, discover_entrypoints
 from utils.examples import EXAMPLES, get_example
 from utils.history_store import load_recent_records, progress_summary, save_analysis_record
 from utils.report_export import build_html_report, build_linkedin_summary, build_markdown_report
-from utils.test_case_generator import generate_test_cases
+from utils.test_case_generator import build_benchmark_batch_input, generate_test_cases
 from visualization.charts import (
     history_chart,
     memory_chart,
@@ -64,6 +64,8 @@ from visualization.ui_helpers import (
     render_empty_state,
     severity_pill,
 )
+
+LEGACY_DEFAULT_BENCHMARK_INPUT = '{"args": [[2, 7, 11, 15, 21, 30, 42, 55], 57]}'
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -99,6 +101,7 @@ def _initialize_state() -> None:
         "algorithm_planner_result": None,
         "algorithm_planner_submit_pending": False,
         "code_analyzer_plan_submit_pending": False,
+        "benchmark_input_widget_version": 0,
         "gemini_api_key": "",
         "gemini_api_key_widget_version": 0,
         "pending_gemini_api_key": "",
@@ -115,6 +118,8 @@ def _initialize_state() -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+    if str(st.session_state.get("benchmark_input", "") or "").strip() == LEGACY_DEFAULT_BENCHMARK_INPUT:
+        st.session_state.benchmark_input = ""
 
 
 def _clear_outputs() -> None:
@@ -196,34 +201,39 @@ def _validation_benchmark_input() -> str:
     return str(st.session_state.get("benchmark_input", "") or "")
 
 
-def _default_generated_benchmark_input() -> str:
-    cases = st.session_state.get("generated_test_cases", [])
-    if cases:
-        return str(cases[0].benchmark_input or "")
-    return ""
+def _benchmark_input_widget_key() -> str:
+    version = int(st.session_state.get("benchmark_input_widget_version", 0) or 0)
+    return f"benchmark_input_editor_{version}"
+
+
+def _set_benchmark_input(value: str, entrypoint: str = "") -> None:
+    st.session_state.benchmark_input = value
+    st.session_state.benchmark_input_entrypoint = entrypoint
+    st.session_state.benchmark_input_widget_version = int(
+        st.session_state.get("benchmark_input_widget_version", 0) or 0
+    ) + 1
 
 
 def _refresh_benchmark_input_for_entrypoint(force: bool = False) -> None:
     current_entrypoint = str(st.session_state.get("entrypoint", "") or "")
-    last_entrypoint = str(st.session_state.get("benchmark_input_entrypoint", "") or "")
+    if force:
+        _set_benchmark_input("", current_entrypoint)
+    else:
+        st.session_state.benchmark_input_entrypoint = current_entrypoint
 
-    generated_default = _default_generated_benchmark_input()
-    if not generated_default:
+
+def _autofill_benchmark_input_from_generated_cases(force: bool = False) -> None:
+    cases = st.session_state.get("generated_test_cases", [])
+    generated_input = build_benchmark_batch_input(cases)
+    if not generated_input:
         return
 
     current_input = str(st.session_state.get("benchmark_input", "") or "").strip()
-
-    stale_entrypoint = current_entrypoint and current_entrypoint != last_entrypoint
-    empty_input = not current_input
-    looks_like_two_sum_demo = (
-        '"args"' in current_input
-        and "[2, 7, 11, 15" in current_input
-        and "57" in current_input
-    )
-
-    if force or empty_input or stale_entrypoint or looks_like_two_sum_demo:
-        st.session_state.benchmark_input = generated_default
-        st.session_state.benchmark_input_entrypoint = current_entrypoint
+    current_entrypoint = str(st.session_state.get("entrypoint", "") or "")
+    last_entrypoint = str(st.session_state.get("benchmark_input_entrypoint", "") or "")
+    should_fill = force or not current_input or (current_entrypoint and current_entrypoint != last_entrypoint)
+    if should_fill:
+        _set_benchmark_input(generated_input, current_entrypoint)
 
 
 def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
@@ -242,6 +252,7 @@ def _analyze_current(
     generate_candidates: bool = False,
     candidate_provider=None,
     api_key: str = "",
+    autofill_benchmark_input: bool = False,
 ) -> None:
     code = st.session_state.editor_code
     _sync_entrypoint_with_code(update_state=True)
@@ -257,6 +268,8 @@ def _analyze_current(
         definitions=definitions,
     )
     _refresh_benchmark_input_for_entrypoint()
+    if autofill_benchmark_input:
+        _autofill_benchmark_input_from_generated_cases()
     plan = build_optimization_plan(
         analysis,
         score,
@@ -286,6 +299,7 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
         definitions=definitions,
     )
     _refresh_benchmark_input_for_entrypoint()
+    _autofill_benchmark_input_from_generated_cases()
     if st.session_state.docker_backend:
         benchmark = run_benchmark_in_docker(
             code=code,
@@ -334,6 +348,7 @@ def _run_scaling() -> None:
         definitions=definitions,
     )
     _refresh_benchmark_input_for_entrypoint()
+    _autofill_benchmark_input_from_generated_cases()
     sizes = st.session_state.scaling_sizes
     if isinstance(sizes, str):
         parsed_sizes = [int(item.strip()) for item in sizes.split(",") if item.strip().isdigit()]
@@ -589,8 +604,7 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
                     f"Use as benchmark input #{index}",
                     key=f"use_generated_case_{index}",
                 ):
-                    st.session_state.benchmark_input = case.benchmark_input
-                    st.session_state.benchmark_input_entrypoint = st.session_state.entrypoint
+                    _set_benchmark_input(case.benchmark_input, st.session_state.entrypoint)
                     st.success("Benchmark input updated from generated test case.")
                     _rerun()
 
@@ -638,6 +652,7 @@ def _render_benchmark_tab(
         cols[1].metric("Peak Runtime", f"{benchmark.summary.max_ms:.4f} ms")
         cols[2].metric("Std dev", f"{benchmark.summary.std_ms:.4f} ms")
         cols[3].metric("Peak memory", f"{benchmark.summary.max_peak_memory_kb:.2f} KB")
+        st.caption(f"Benchmark input: {benchmark.input_description}. Total measured executions: {benchmark.summary.repeat_count}.")
         chart_cols = st.columns(2)
         with chart_cols[0]:
             st.plotly_chart(runtime_chart(benchmark))
@@ -1150,7 +1165,8 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
         with st.spinner("Analyzing AST features and estimating complexity..."):
             st.session_state.benchmark = None
             st.session_state.gemini_text = None
-            _analyze_current(None)
+            _analyze_current(None, autofill_benchmark_input=True)
+            _rerun()
     if benchmark_clicked:
         with st.spinner("Running guarded benchmarks with timing and memory tracing..."):
             st.session_state.gemini_text = None
@@ -1229,17 +1245,15 @@ def main() -> None:
             if st.button("Load Example", width="stretch"):
                 example = get_example(example_name)
                 st.session_state.editor_code = example["code"]
-                st.session_state.benchmark_input = example["input"]
+                _set_benchmark_input("", example["entrypoint"])
                 st.session_state.entrypoint = example["entrypoint"]
-                st.session_state.benchmark_input_entrypoint = example["entrypoint"]
                 _clear_outputs()
                 _rerun()
         with reset_col:
             if st.button("Reset", width="stretch"):
                 st.session_state.editor_code = DEFAULT_CODE
-                st.session_state.benchmark_input = DEFAULT_INPUT
+                _set_benchmark_input("", "two_sum")
                 st.session_state.entrypoint = "two_sum"
-                st.session_state.benchmark_input_entrypoint = "two_sum"
                 st.session_state.benchmark_history = []
                 _clear_outputs()
                 _rerun()
@@ -1288,12 +1302,18 @@ def main() -> None:
             definitions=definitions,
         )
         _refresh_benchmark_input_for_entrypoint()
-        st.text_area(
+        benchmark_input_value = st.text_area(
             "Benchmark input",
-            key="benchmark_input",
+            value=str(st.session_state.get("benchmark_input", "") or ""),
+            key=_benchmark_input_widget_key(),
             height=140,
-            help='Use JSON/Python literal, {"args": [...], "kwargs": {...}}, or simple assignments like arr = [1, 2, 3].',
+            help=(
+                'Leave blank until you are ready to run. Use {"args": [...], "kwargs": {...}}, '
+                'simple assignments like arr = [1, 2, 3], {"stdin": "line1\\nline2\\n"} for input() code, '
+                'or multiple cases like [{"kwargs": {...}}, {"stdin": "..."}].'
+            ),
         )
+        st.session_state.benchmark_input = benchmark_input_value
         st.slider("Benchmark repeats", min_value=1, max_value=30, value=DEFAULT_REPEAT_COUNT, key="repeat_count")
         st.slider(
             "Timeout seconds",

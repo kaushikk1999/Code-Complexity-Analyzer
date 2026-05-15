@@ -325,7 +325,7 @@ def _function_args(code: str, entrypoint: str) -> List[str]:
     if not definition:
         return []
     args = list(definition.args)
-    if definition.is_method and args and args[0] in {"self", "cls"}:
+    if args and args[0] in {"self", "cls"}:
         return args[1:]
     return args
 

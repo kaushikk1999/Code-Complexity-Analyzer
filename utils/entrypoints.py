@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 PREFERRED_ENTRYPOINT_NAMES = ("main", "solve", "solution")
+RECEIVER_ARG_NAMES = {"self", "cls"}
 
 
 @dataclass(frozen=True)
@@ -28,12 +29,20 @@ class EntrypointDefinition:
         return bool(self.class_name)
 
     @property
+    def has_receiver_arg(self) -> bool:
+        return bool(self.args and self.args[0] in RECEIVER_ARG_NAMES)
+
+    @property
+    def needs_standalone_receiver(self) -> bool:
+        return self.has_receiver_arg and not self.is_method
+
+    @property
     def callable_name(self) -> str:
         return self.qualified_name if self.is_method else self.name
 
     @property
     def benchmark_args(self) -> List[str]:
-        if self.is_method and self.args and self.args[0] in {"self", "cls"}:
+        if self.has_receiver_arg:
             return self.args[1:]
         return list(self.args)
 
@@ -151,7 +160,12 @@ def benchmark_input_hint(definition: EntrypointDefinition) -> str:
     optional = definition.benchmark_args[definition.required_positional_count :]
     if optional:
         hint += f" Optional positional args with defaults: {', '.join(optional)}."
-    hint += " Assignment-style input is also supported, for example `arr = [1, 2, 3]`."
+    hint += (
+        " Assignment-style input is also supported, for example `arr = [1, 2, 3]`. "
+        "For many cases, paste a JSON array like "
+        f"`[{json.dumps(sample)}, {json.dumps(sample)}]`. "
+        "For code that calls input(), use `{\"stdin\": \"line1\\nline2\\n\"}`."
+    )
     return hint
 
 

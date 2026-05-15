@@ -74,6 +74,7 @@ def run_benchmark_in_docker(
             error=missing_entrypoint_message(entrypoint, definitions),
             safety_notes=["Docker backend was requested, but the configured entrypoint was not found."],
         )
+    needs_receiver = definition.needs_standalone_receiver
     entrypoint = definition.callable_name
 
     runner_source = textwrap.dedent(
@@ -85,18 +86,68 @@ def run_benchmark_in_docker(
         INPUT_TEXT = {json.dumps(input_text)}
         REPEAT_COUNT = {int(repeat_count)}
         WARMUP_COUNT = {int(warmup_count)}
+        NEEDS_RECEIVER = {json.dumps(needs_receiver)}
+
+        def coerce_stdin_lines(value):
+            if value is None:
+                return []
+            if isinstance(value, str):
+                return value.splitlines()
+            if isinstance(value, (list, tuple)):
+                return [str(item) for item in value]
+            raise ValueError("stdin must be a string or list of lines.")
+
+        STDIN_STATE = {{"lines": []}}
+
+        def set_stdin(lines):
+            STDIN_STATE["lines"] = list(lines or [])
+
+        def safe_input(prompt=""):
+            if not STDIN_STATE["lines"]:
+                raise EOFError("No benchmark stdin line is available for input(). Add stdin to Benchmark input.")
+            return STDIN_STATE["lines"].pop(0)
+
+        def parse_case(value, index):
+            if isinstance(value, dict) and ("args" in value or "kwargs" in value or "stdin" in value):
+                args = value.get("args", [])
+                kwargs = value.get("kwargs", {{}})
+                stdin_lines = coerce_stdin_lines(value.get("stdin"))
+                name = str(value.get("name", "") or value.get("case", "") or "").strip()
+                if name:
+                    description = name
+                elif stdin_lines and not args and not kwargs:
+                    description = f"stdin: {{len(stdin_lines)}} line(s)"
+                else:
+                    description = f"{{len(args)}} positional arg(s), {{len(kwargs)}} keyword arg(s)"
+                    if stdin_lines:
+                        description += f", {{len(stdin_lines)}} stdin line(s)"
+                return tuple(args), kwargs, f"case {{index}}: {{description}}", stdin_lines
+            raise ValueError(f"Case {{index}} must be an object with args, kwargs, stdin, or a combination.")
 
         def parse_input(text):
             text = (text or "").strip()
             if not text:
-                return (), {{}}, "no arguments"
+                return [((), {{}}, "no arguments")], "no arguments"
             try:
                 value = json.loads(text)
             except Exception:
                 value = ast.literal_eval(text)
+            cases = None
+            if isinstance(value, dict) and "cases" in value:
+                cases = value["cases"]
+            elif isinstance(value, list) and value and all(isinstance(item, dict) and ("args" in item or "kwargs" in item or "stdin" in item) for item in value):
+                cases = value
+            if cases is not None:
+                if not isinstance(cases, list) or not cases:
+                    raise ValueError("Batch benchmark input must include at least one case.")
+                parsed = [parse_case(item, index) for index, item in enumerate(cases, start=1)]
+                return parsed, f"{{len(parsed)}} benchmark case(s)"
             if isinstance(value, dict) and ("args" in value or "kwargs" in value):
-                return tuple(value.get("args", [])), value.get("kwargs", {{}}), "structured"
-            return (value,), {{}}, "single positional"
+                return [parse_case(value, 1)], "structured"
+            if isinstance(value, dict) and "stdin" in value:
+                case = parse_case(value, 1)
+                return [case], case[2]
+            return [((value,), {{}}, "single positional")], "single positional"
 
         def clone(args, kwargs):
             try:
@@ -105,8 +156,9 @@ def run_benchmark_in_docker(
                 return args, dict(kwargs)
 
         try:
-            args, kwargs, input_description = parse_input(INPUT_TEXT)
-            namespace = {{}}
+            cases, input_description = parse_input(INPUT_TEXT)
+            set_stdin(cases[0][3] if cases else [])
+            namespace = {{"input": safe_input}}
             exec(compile(CODE, "<user_code>", "exec"), namespace, namespace)
             if "." in ENTRYPOINT:
                 class_name, method_name = ENTRYPOINT.split(".", 1)
@@ -139,24 +191,36 @@ def run_benchmark_in_docker(
                             break
             if not callable(target):
                 raise ValueError(f"Entrypoint {{ENTRYPOINT}} was not found or callable.")
-            for _ in range(max(0, WARMUP_COUNT)):
-                a, kw = clone(args, kwargs)
-                target(*a, **kw)
             runs = []
-            for index in range(REPEAT_COUNT):
-                a, kw = clone(args, kwargs)
-                tracemalloc.start()
-                start = time.perf_counter_ns()
-                target(*a, **kw)
-                end = time.perf_counter_ns()
-                current, peak = tracemalloc.get_traced_memory()
-                tracemalloc.stop()
-                runs.append({{
-                    "run_index": index + 1,
-                    "runtime_ms": (end - start) / 1_000_000,
-                    "current_memory_kb": current / 1024,
-                    "peak_memory_kb": peak / 1024,
-                }})
+            for case_index, (args, kwargs, case_description, stdin_lines) in enumerate(cases, start=1):
+                for _ in range(max(0, WARMUP_COUNT)):
+                    a, kw = clone(args, kwargs)
+                    set_stdin(stdin_lines)
+                    if NEEDS_RECEIVER:
+                        target(None, *a, **kw)
+                    else:
+                        target(*a, **kw)
+                for case_run_index in range(1, REPEAT_COUNT + 1):
+                    a, kw = clone(args, kwargs)
+                    set_stdin(stdin_lines)
+                    tracemalloc.start()
+                    start = time.perf_counter_ns()
+                    if NEEDS_RECEIVER:
+                        target(None, *a, **kw)
+                    else:
+                        target(*a, **kw)
+                    end = time.perf_counter_ns()
+                    current, peak = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    runs.append({{
+                        "run_index": len(runs) + 1,
+                        "runtime_ms": (end - start) / 1_000_000,
+                        "current_memory_kb": current / 1024,
+                        "peak_memory_kb": peak / 1024,
+                        "case_index": case_index,
+                        "case_description": case_description,
+                        "case_run_index": case_run_index,
+                    }})
             print(json.dumps({{"success": True, "input_description": input_description, "runs": runs}}))
         except Exception as exc:
             print(json.dumps({{"success": False, "error": f"{{type(exc).__name__}}: {{exc}}"}}))

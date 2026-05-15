@@ -57,7 +57,6 @@ DANGEROUS_BUILTINS = {
     "exec",
     "getattr",
     "globals",
-    "input",
     "locals",
     "open",
     "setattr",
@@ -213,14 +212,33 @@ def _safe_import(name: str, globals_: Any = None, locals_: Any = None, fromlist:
     return builtins.__import__(name, globals_, locals_, fromlist, level)
 
 
-def build_safe_globals() -> Dict[str, Any]:
+def _safe_input_factory(stdin_lines: List[str] = None) -> Tuple[Any, Any]:
+    state = {"lines": list(stdin_lines or [])}
+
+    def set_stdin(lines: List[str] = None) -> None:
+        state["lines"] = list(lines or [])
+
+    def safe_input(prompt: str = "") -> str:
+        if not state["lines"]:
+            raise EOFError(
+                "No benchmark stdin line is available for input(). Add stdin to Benchmark input."
+            )
+        return state["lines"].pop(0)
+
+    return safe_input, set_stdin
+
+
+def build_safe_globals(stdin_lines: List[str] = None) -> Dict[str, Any]:
     safe_builtins: Dict[str, Any] = {
         name: getattr(builtins, name) for name in SAFE_BUILTIN_NAMES if hasattr(builtins, name)
     }
+    safe_input, set_stdin = _safe_input_factory(stdin_lines)
     safe_builtins["__build_class__"] = builtins.__build_class__
     safe_builtins["__import__"] = _safe_import
+    safe_builtins["input"] = safe_input
     return {
         "__builtins__": safe_builtins,
+        "__set_benchmark_stdin__": set_stdin,
         "__name__": "__user_code__",
         "List": List,
         "Dict": Dict,

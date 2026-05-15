@@ -43,6 +43,64 @@ BENCHMARK_PROFILES = {
     "Stress": {"repeat_count": 7, "warmup_count": 2, "timeout_seconds": 12.0, "sizes": [50, 500, 1500]},
 }
 
+BenchmarkCase = Tuple[Tuple[Any, ...], Dict[str, Any], str, List[str]]
+
+
+def _code_uses_input(code: str) -> bool:
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return False
+    return any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "input"
+        for node in ast.walk(tree)
+    )
+
+
+def _coerce_stdin_lines(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return value.splitlines()
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    raise ValueError("`stdin` must be a string or a list of lines.")
+
+
+def _stdin_description(stdin_lines: List[str]) -> str:
+    return f"stdin: {len(stdin_lines)} line(s)"
+
+
+def _is_safe_top_level_assignment(node: ast.stmt) -> bool:
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return False
+    value = node.value
+    if value is None:
+        return False
+    return not any(
+        isinstance(child, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom))
+        for child in ast.walk(value)
+    )
+
+
+def _compile_user_code(code: str, entrypoint: str) -> CodeType:
+    if not entrypoint:
+        return compile(code, "<user_code>", "exec")
+
+    tree = ast.parse(code or "", mode="exec")
+    safe_body: List[ast.stmt] = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            safe_body.append(node)
+        elif _is_safe_top_level_assignment(node):
+            safe_body.append(node)
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            safe_body.append(node)
+
+    module = ast.Module(body=safe_body, type_ignores=getattr(tree, "type_ignores", []))
+    ast.fix_missing_locations(module)
+    return compile(module, "<user_code>", "exec")
+
 
 def _parse_assignment_benchmark_input(
     text: str,
@@ -90,6 +148,7 @@ def _parse_benchmark_input(
                 '{"kwargs": {"s": "leetcode", "wordDict": ["leet", "code"]}}\n\n'
                 's = "leetcode"\n'
                 'wordDict = ["leet", "code"]\n\n'
+                '{"stdin": "3\\n1 2 3\\n"} for code that calls input()\n\n'
                 f"Parser detail: {exc}"
             ) from exc
 
@@ -105,6 +164,86 @@ def _parse_benchmark_input(
     return (value,), {}, "single positional argument"
 
 
+def _parse_benchmark_case_value(value: Any, case_index: int) -> BenchmarkCase:
+    if isinstance(value, dict) and ("args" in value or "kwargs" in value or "stdin" in value):
+        args_value = value.get("args", [])
+        kwargs_value = value.get("kwargs", {})
+        if not isinstance(args_value, (list, tuple)):
+            raise ValueError(f"Case {case_index}: `args` must be a list or tuple.")
+        if not isinstance(kwargs_value, dict):
+            raise ValueError(f"Case {case_index}: `kwargs` must be an object/dict.")
+        stdin_lines = _coerce_stdin_lines(value.get("stdin"))
+        name = str(value.get("name", "") or value.get("case", "") or "").strip()
+        if name:
+            description = name
+        elif stdin_lines and not args_value and not kwargs_value:
+            description = _stdin_description(stdin_lines)
+        else:
+            description = f"{len(args_value)} positional arg(s), {len(kwargs_value)} keyword arg(s)"
+            if stdin_lines:
+                description += f", {len(stdin_lines)} stdin line(s)"
+        return tuple(args_value), kwargs_value, f"case {case_index}: {description}", stdin_lines
+    raise ValueError(
+        f"Case {case_index}: each batch case must be an object with `args`, `kwargs`, `stdin`, or a combination."
+    )
+
+
+def _parse_benchmark_cases(
+    input_text: str,
+    code: str = "",
+    definition: EntrypointDefinition = None,
+) -> Tuple[List[BenchmarkCase], str]:
+    text = (input_text or "").strip()
+    if not text:
+        return [((), {}, "no arguments", [])], "no arguments"
+
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            value = ast.literal_eval(text)
+        except Exception:
+            try:
+                args, kwargs, description = _parse_benchmark_input(input_text, code, definition)
+            except ValueError as exc:
+                if _code_uses_input(code):
+                    stdin_lines = _coerce_stdin_lines(input_text)
+                    description = _stdin_description(stdin_lines)
+                    return [((), {}, description, stdin_lines)], description
+                raise exc
+            return [(args, kwargs, description, [])], description
+
+    structured_case = isinstance(value, dict) and (
+        "args" in value or "kwargs" in value or "stdin" in value or "cases" in value
+    )
+    batch_case = isinstance(value, list) and value and all(
+        isinstance(item, dict) and ("args" in item or "kwargs" in item or "stdin" in item) for item in value
+    )
+    if _code_uses_input(code) and not structured_case and not batch_case:
+        stdin_lines = _coerce_stdin_lines(input_text)
+        description = _stdin_description(stdin_lines)
+        return [((), {}, description, stdin_lines)], description
+
+    cases_value = None
+    if isinstance(value, dict) and "cases" in value:
+        cases_value = value["cases"]
+    elif batch_case:
+        cases_value = value
+
+    if cases_value is None:
+        if isinstance(value, dict) and "stdin" in value:
+            case = _parse_benchmark_case_value(value, 1)
+            return [case], case[2]
+        args, kwargs, description = _parse_benchmark_input(input_text, code, definition)
+        return [(args, kwargs, description, [])], description
+
+    if not isinstance(cases_value, list) or not cases_value:
+        raise ValueError("Batch benchmark input must include at least one case.")
+
+    cases = [_parse_benchmark_case_value(item, index) for index, item in enumerate(cases_value, start=1)]
+    return cases, f"{len(cases)} benchmark case(s)"
+
+
 def _clone_inputs(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
     try:
         return copy.deepcopy(args), copy.deepcopy(kwargs)
@@ -112,10 +251,16 @@ def _clone_inputs(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Tuple[Tuple[
         return args, dict(kwargs)
 
 
-def _execute_user_code(compiled: CodeType) -> Dict[str, Any]:
-    namespace = build_safe_globals()
+def _execute_user_code(compiled: CodeType, stdin_lines: List[str] = None) -> Dict[str, Any]:
+    namespace = build_safe_globals(stdin_lines)
     exec(compiled, namespace, namespace)
     return namespace
+
+
+def _reset_stdin(namespace: Dict[str, Any], stdin_lines: List[str]) -> None:
+    setter = namespace.get("__set_benchmark_stdin__")
+    if callable(setter):
+        setter(stdin_lines)
 
 
 def _resolve_entrypoint(namespace: Dict[str, Any], entrypoint: str) -> Any:
@@ -162,68 +307,85 @@ def _resolve_entrypoint(namespace: Dict[str, Any], entrypoint: str) -> Any:
     return None
 
 
+def _invoke_target(target: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any], needs_receiver: bool) -> Any:
+    if needs_receiver:
+        return target(None, *args, **kwargs)
+    return target(*args, **kwargs)
+
+
 def _worker(
     code: str,
     entrypoint: str,
-    args: Tuple[Any, ...],
-    kwargs: Dict[str, Any],
+    cases: List[BenchmarkCase],
     repeat_count: int,
     warmup_count: int,
+    needs_receiver: bool,
     allow_top_level: bool,
     result_queue: "mp.Queue[Dict[str, Any]]",
 ) -> None:
     try:
-        compiled = compile(code, "<user_code>", "exec")
-        namespace = _execute_user_code(compiled)
+        compiled = _compile_user_code(code, entrypoint)
+        initial_stdin = cases[0][3] if cases else []
+        namespace = _execute_user_code(compiled, initial_stdin)
 
-        runs: List[Dict[str, float]] = []
+        runs: List[Dict[str, Any]] = []
         if entrypoint:
             target = _resolve_entrypoint(namespace, entrypoint)
             if not callable(target):
                 raise ValueError(f"Entrypoint `{entrypoint}` was not found or is not callable.")
 
-            for _ in range(max(0, warmup_count)):
-                run_args, run_kwargs = _clone_inputs(args, kwargs)
-                target(*run_args, **run_kwargs)
+            for case_index, (args, kwargs, case_description, stdin_lines) in enumerate(cases, start=1):
+                for _ in range(max(0, warmup_count)):
+                    run_args, run_kwargs = _clone_inputs(args, kwargs)
+                    _reset_stdin(namespace, stdin_lines)
+                    _invoke_target(target, run_args, run_kwargs, needs_receiver)
 
-            for index in range(repeat_count):
-                run_args, run_kwargs = _clone_inputs(args, kwargs)
-                tracemalloc.start()
-                start = time.perf_counter_ns()
-                target(*run_args, **run_kwargs)
-                end = time.perf_counter_ns()
-                current, peak = tracemalloc.get_traced_memory()
-                tracemalloc.stop()
-                runs.append(
-                    {
-                        "run_index": index + 1,
-                        "runtime_ms": (end - start) / 1_000_000,
-                        "current_memory_kb": current / 1024,
-                        "peak_memory_kb": peak / 1024,
-                    }
-                )
+                for case_run_index in range(1, repeat_count + 1):
+                    run_args, run_kwargs = _clone_inputs(args, kwargs)
+                    _reset_stdin(namespace, stdin_lines)
+                    tracemalloc.start()
+                    start = time.perf_counter_ns()
+                    _invoke_target(target, run_args, run_kwargs, needs_receiver)
+                    end = time.perf_counter_ns()
+                    current, peak = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    runs.append(
+                        {
+                            "run_index": len(runs) + 1,
+                            "runtime_ms": (end - start) / 1_000_000,
+                            "current_memory_kb": current / 1024,
+                            "peak_memory_kb": peak / 1024,
+                            "case_index": case_index,
+                            "case_description": case_description,
+                            "case_run_index": case_run_index,
+                        }
+                    )
         else:
             if not allow_top_level:
                 raise ValueError(
                     "Top-level script benchmarking is disabled. Provide an entrypoint or enable top-level execution."
                 )
-            for _ in range(max(0, warmup_count)):
-                _execute_user_code(compiled)
-            for index in range(repeat_count):
-                tracemalloc.start()
-                start = time.perf_counter_ns()
-                _execute_user_code(compiled)
-                end = time.perf_counter_ns()
-                current, peak = tracemalloc.get_traced_memory()
-                tracemalloc.stop()
-                runs.append(
-                    {
-                        "run_index": index + 1,
-                        "runtime_ms": (end - start) / 1_000_000,
-                        "current_memory_kb": current / 1024,
-                        "peak_memory_kb": peak / 1024,
-                    }
-                )
+            for case_index, (_, _, case_description, stdin_lines) in enumerate(cases, start=1):
+                for _ in range(max(0, warmup_count)):
+                    _execute_user_code(compiled, stdin_lines)
+                for case_run_index in range(1, repeat_count + 1):
+                    tracemalloc.start()
+                    start = time.perf_counter_ns()
+                    _execute_user_code(compiled, stdin_lines)
+                    end = time.perf_counter_ns()
+                    current, peak = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    runs.append(
+                        {
+                            "run_index": len(runs) + 1,
+                            "runtime_ms": (end - start) / 1_000_000,
+                            "current_memory_kb": current / 1024,
+                            "peak_memory_kb": peak / 1024,
+                            "case_index": case_index,
+                            "case_description": case_description,
+                            "case_run_index": case_run_index,
+                        }
+                    )
         result_queue.put({"success": True, "runs": runs})
     except Exception as exc:
         try:
@@ -269,7 +431,7 @@ def run_benchmark(
         )
 
     try:
-        args, kwargs, input_description = _parse_benchmark_input(input_text, code, definition)
+        cases, input_description = _parse_benchmark_cases(input_text, code, definition)
     except ValueError as exc:
         return BenchmarkResult(
             success=False,
@@ -280,23 +442,35 @@ def run_benchmark(
         )
 
     if definition:
-        argument_error = validate_call_arguments(definition, args, kwargs)
-        if argument_error:
+        for case_index, (case_args, case_kwargs, _, _) in enumerate(cases, start=1):
+            argument_error = validate_call_arguments(definition, case_args, case_kwargs)
+            if argument_error:
+                return BenchmarkResult(
+                    success=False,
+                    entrypoint=entrypoint,
+                    input_description=input_description,
+                    error=f"Case {case_index}: {argument_error}",
+                    safety_notes=SAFETY_NOTES,
+                )
+        entrypoint = definition.callable_name
+        needs_receiver = definition.needs_standalone_receiver
+    else:
+        if len(cases) > 1:
             return BenchmarkResult(
                 success=False,
                 entrypoint=entrypoint,
                 input_description=input_description,
-                error=argument_error,
+                error="Batch benchmark input requires a named function entrypoint.",
                 safety_notes=SAFETY_NOTES,
             )
-        entrypoint = definition.callable_name
+        needs_receiver = False
 
     start_method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
     context: Any = mp.get_context(start_method)
     result_queue: "mp.Queue[Dict[str, Any]]" = context.Queue()
     process = context.Process(
         target=_worker,
-        args=(code, entrypoint, args, kwargs, repeat_count, warmup_count, allow_top_level, result_queue),
+        args=(code, entrypoint, cases, repeat_count, warmup_count, needs_receiver, allow_top_level, result_queue),
     )
     process.start()
     process.join(timeout_seconds)
@@ -386,7 +560,8 @@ def _resize_value(value: Any, size: int, shape: str) -> Any:
 
 
 def build_scaled_input(input_text: str, size: int, data_shape: str) -> str:
-    args, kwargs, _ = _parse_benchmark_input(input_text)
+    cases, _ = _parse_benchmark_cases(input_text)
+    args, kwargs, _, _ = cases[0]
     if args:
         resized_args = list(args)
         resized_args[0] = _resize_value(args[0], size, data_shape)

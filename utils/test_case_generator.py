@@ -29,6 +29,29 @@ def _json_kwargs(**kwargs: Any) -> str:
     return json.dumps({"kwargs": kwargs}, ensure_ascii=False)
 
 
+def build_benchmark_batch_input(cases: List[GeneratedTestCase]) -> str:
+    if not cases:
+        return ""
+
+    payload_cases = []
+    for case in cases:
+        try:
+            payload = json.loads(case.benchmark_input)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or not any(key in payload for key in ("args", "kwargs", "stdin")):
+            continue
+        named_payload = dict(payload)
+        named_payload.setdefault("name", case.name)
+        payload_cases.append(named_payload)
+
+    if not payload_cases:
+        return cases[0].benchmark_input
+    if len(payload_cases) == 1:
+        return json.dumps(payload_cases[0], ensure_ascii=False, indent=2)
+    return json.dumps({"cases": payload_cases}, ensure_ascii=False, indent=2)
+
+
 def generate_test_cases(
     code: str,
     entrypoint: str,

@@ -13,6 +13,9 @@ class BenchmarkRun:
     runtime_ms: float
     current_memory_kb: float
     peak_memory_kb: float
+    case_index: int = 1
+    case_description: str = ""
+    case_run_index: int = 1
 
 
 @dataclass

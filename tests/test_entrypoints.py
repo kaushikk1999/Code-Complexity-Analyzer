@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from utils.entrypoints import choose_entrypoint, discover_entrypoints
+from utils.constants import DEFAULT_INPUT
+from utils.entrypoints import benchmark_input_hint, choose_entrypoint, discover_entrypoints
+from utils.test_case_generator import generate_test_cases
 
 BINARY_SEARCH_CODE = """
 def binary_search(arr, target, left=0, right=None):
@@ -48,9 +50,46 @@ class Solution:
     assert choose_entrypoint(code, "search") == "Solution.search"
 
 
+def test_top_level_leetcode_method_receiver_is_not_benchmark_input():
+    code = """
+def removeElement(self, nums: List[int], val: int) -> int:
+    return len([item for item in nums if item != val])
+"""
+    definitions = discover_entrypoints(code)
+    assert [definition.callable_name for definition in definitions] == ["removeElement"]
+    assert definitions[0].needs_standalone_receiver
+    assert definitions[0].benchmark_args == ["nums", "val"]
+    assert definitions[0].required_positional_count == 2
+    assert "self" not in benchmark_input_hint(definitions[0])
+
+
+def test_generated_cases_skip_top_level_leetcode_receiver():
+    code = """
+def removeElement(self, nums: List[int], val: int) -> int:
+    return len([item for item in nums if item != val])
+"""
+    definitions = discover_entrypoints(code)
+    cases = generate_test_cases(code, "removeElement", definitions)
+    assert cases
+    assert '"nums"' in cases[0].benchmark_input
+    assert '"val"' in cases[0].benchmark_input
+    assert '"self"' not in cases[0].benchmark_input
+
+
 def test_app_uses_auto_detected_entrypoint_selectbox():
     app_source = Path("app.py").read_text(encoding="utf-8")
     assert "choose_entrypoint" in app_source
     assert "st.selectbox(" in app_source
     assert "st.text_input(" in app_source
     assert app_source.count('"Entrypoint function"') >= 2
+
+
+def test_benchmark_input_starts_empty_and_examples_do_not_prefill():
+    app_source = Path("app.py").read_text(encoding="utf-8")
+    assert DEFAULT_INPUT == ""
+    assert 'st.session_state.benchmark_input = example["input"]' not in app_source
+    assert 'st.session_state.benchmark_input = DEFAULT_INPUT' not in app_source
+    assert "_autofill_benchmark_input_from_generated_cases" in app_source
+    assert "_analyze_current(None, autofill_benchmark_input=True)" in app_source
+    assert 'key="benchmark_input"' not in app_source
+    assert "_benchmark_input_widget_key()" in app_source

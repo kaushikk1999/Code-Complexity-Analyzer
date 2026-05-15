@@ -15,4 +15,4 @@ DEFAULT_CODE = '''def two_sum(nums, target):
     return []
 '''
 
-DEFAULT_INPUT = '{"args": [[2, 7, 11, 15, 21, 30, 42, 55], 57]}'
+DEFAULT_INPUT = ""
