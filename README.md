@@ -181,7 +181,7 @@ Ollama receives a compact JSON object of local facts and is used only to improve
 - static complexity estimates,
 - optimization scoring.
 
-The fixed Ollama Cloud model is `deepseek-v4-pro:cloud`.
+The preferred Ollama Cloud model is `deepseek-v4-pro:cloud`. If the account does not have subscription access to DeepSeek-V4-Pro, the app falls back to `qwen3-coder-next:cloud`.
 
 Ollama API projects can still hit model, account, or rate limits. When Algorithm Planner receives an Ollama quota or rate-limit response, Complexity Lab returns a local fallback optimization plan instead of blocking the workflow with a hard error.
 

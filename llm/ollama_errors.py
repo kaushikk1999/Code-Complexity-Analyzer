@@ -5,14 +5,15 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_OLLAMA_MODEL = "deepseek-v4-pro:cloud"
-OLLAMA_MODEL_FALLBACKS = (DEFAULT_OLLAMA_MODEL,)
+OLLAMA_MODEL_FALLBACKS = (DEFAULT_OLLAMA_MODEL, "qwen3-coder-next:cloud")
 OLLAMA_HOST = "https://ollama.com"
 
 
@@ -23,7 +24,7 @@ class OllamaErrorDiagnostic:
 
 
 def model_candidates() -> list[str]:
-    return [DEFAULT_OLLAMA_MODEL]
+    return list(OLLAMA_MODEL_FALLBACKS)
 
 
 def ollama_error_diagnostic(exc: Exception) -> OllamaErrorDiagnostic:
@@ -33,6 +34,10 @@ def ollama_error_diagnostic(exc: Exception) -> OllamaErrorDiagnostic:
     if isinstance(raw_text, bytes):
         raw_text = raw_text.decode("utf-8", errors="replace")
     text = sanitize_ollama_error_text(f"{type(exc).__name__} {raw_text}")
+    if status_code is None:
+        match = re.search(r"status code:\s*(\d+)", text, flags=re.IGNORECASE)
+        if match:
+            status_code = match.group(1)
     try:
         status_code = int(status_code) if status_code is not None else None
     except (TypeError, ValueError):
@@ -75,6 +80,8 @@ def classify_ollama_error(exc: Exception) -> str:
             "forbidden",
             "model access",
             "models/",
+            "requires a subscription",
+            "upgrade for access",
         )
     ):
         return "model_unavailable"
@@ -87,7 +94,7 @@ def ollama_error_message(category: str) -> str:
         "quota": "Ollama quota or rate limit was reached. Try again later.",
         "model_unavailable": (
             "Ollama Cloud request failed for the selected model. "
-            "Check that your account can access deepseek-v4-pro:cloud."
+            "DeepSeek-V4-Pro may require a subscription; the app will try qwen3-coder-next:cloud as a fallback."
         ),
         "malformed_response": "Ollama responded, but not in the expected format. Try again.",
         "missing_package": "The Ollama Python SDK is not installed. Install ollama and try again.",

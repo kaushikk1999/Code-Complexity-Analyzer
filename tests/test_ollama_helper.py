@@ -64,7 +64,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. Check that your account can access deepseek-v4-pro:cloud.",
+            "Ollama Cloud request failed for the selected model. DeepSeek-V4-Pro may require a subscription; the app will try qwen3-coder-next:cloud as a fallback.",
         ),
     ],
 )
@@ -150,7 +150,7 @@ def test_successful_structured_optimized_code_generation(monkeypatch):
     assert candidate.validation_tests == ["assert two_sum([2, 7], 9) == [0, 1]"]
 
 
-def test_ollama_helper_uses_fixed_qwen_model(monkeypatch):
+def test_ollama_helper_falls_back_to_qwen_when_deepseek_is_unavailable(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -168,6 +168,8 @@ def test_ollama_helper_uses_fixed_qwen_model(monkeypatch):
         calls.append(model_name)
         assert json_mode
         assert client.host == "https://ollama.com"
+        if model_name == "deepseek-v4-pro:cloud":
+            raise RuntimeError("this model requires a subscription (status code: 403)")
         return '{"ok": true}'
 
     monkeypatch.setattr(ollama_helper, "_generate_content", fake_generate_content)
@@ -175,7 +177,7 @@ def test_ollama_helper_uses_fixed_qwen_model(monkeypatch):
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls == ["deepseek-v4-pro:cloud"]
+    assert calls == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
 
 
 def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
@@ -183,7 +185,7 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates == ["deepseek-v4-pro:cloud"]
+    assert candidates == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
 
 
 def test_generate_optimized_code_uses_env_api_key(monkeypatch):
@@ -227,6 +229,7 @@ def test_generate_optimized_code_uses_env_api_key(monkeypatch):
         (403, "permission denied for model", "model_unavailable"),
         (404, "model not found", "model_unavailable"),
         (429, "too many requests", "quota"),
+        (None, "this model requires a subscription (status code: 403)", "model_unavailable"),
     ],
 )
 def test_ollama_error_status_classification(status_code, text, expected):
