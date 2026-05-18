@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 from datetime import datetime
 from typing import List, Optional
 
@@ -22,9 +23,9 @@ from benchmarking import (
 from interview import InterviewGrade, build_follow_up_questions, grade_interview_answer
 from llm import (
     AlgorithmPlannerResult,
-    enhance_with_gemini,
+    enhance_with_ollama,
     generate_algorithm_optimization_plan,
-    generate_optimized_code_with_gemini,
+    generate_optimized_code_with_ollama,
 )
 from optimization import (
     OptimizationPlan,
@@ -95,18 +96,18 @@ def _initialize_state() -> None:
         "scaling": None,
         "score": None,
         "plan": None,
-        "gemini_text": None,
+        "ollama_text": None,
         "answer_grade": None,
         "algorithm_planner_question": "",
         "algorithm_planner_result": None,
         "algorithm_planner_submit_pending": False,
         "code_analyzer_plan_submit_pending": False,
         "benchmark_input_widget_version": 0,
-        "gemini_api_key": "",
-        "gemini_api_key_widget_version": 0,
-        "pending_gemini_api_key": "",
-        "gemini_prompt_decision": "",
-        "gemini_key_requested": False,
+        "ollama_api_key": "",
+        "ollama_api_key_widget_version": 0,
+        "pending_ollama_api_key": "",
+        "ollama_prompt_decision": "",
+        "ollama_key_requested": False,
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
@@ -128,67 +129,72 @@ def _clear_outputs() -> None:
     st.session_state.scaling = None
     st.session_state.score = None
     st.session_state.plan = None
-    st.session_state.gemini_text = None
+    st.session_state.ollama_text = None
     st.session_state.answer_grade = None
     st.session_state.generated_test_cases = []
 
 
-def _gemini_key_widget_key() -> str:
-    version = int(st.session_state.get("gemini_api_key_widget_version", 0) or 0)
-    return f"gemini_api_key_input_{version}"
+def _ollama_key_widget_key() -> str:
+    version = int(st.session_state.get("ollama_api_key_widget_version", 0) or 0)
+    return f"ollama_api_key_input_{version}"
 
 
-def _queue_gemini_submit(flag_key: str) -> None:
-    widget_key = _gemini_key_widget_key()
-    st.session_state.pending_gemini_api_key = str(
-        st.session_state.get(widget_key, "") or st.session_state.get("gemini_api_key", "") or ""
+def _queue_ollama_submit(flag_key: str) -> None:
+    widget_key = _ollama_key_widget_key()
+    st.session_state.pending_ollama_api_key = str(
+        st.session_state.get(widget_key, "") or st.session_state.get("ollama_api_key", "") or ""
     )
-    st.session_state.gemini_api_key = ""
+    st.session_state.ollama_api_key = ""
     if widget_key in st.session_state:
         del st.session_state[widget_key]
-    st.session_state.gemini_api_key_widget_version = int(
-        st.session_state.get("gemini_api_key_widget_version", 0) or 0
+    st.session_state.ollama_api_key_widget_version = int(
+        st.session_state.get("ollama_api_key_widget_version", 0) or 0
     ) + 1
     st.session_state[flag_key] = True
 
 
-@st.dialog("Unlock stronger optimization with Gemini")
-def _gemini_key_dialog(source: str) -> None:
+@st.dialog("Unlock stronger optimization with Ollama")
+def _ollama_key_dialog(source: str) -> None:
     st.write(
-        "Gemini can search a wider optimization space and propose stronger candidate rewrites. "
+        "Ollama Cloud can search a wider optimization space and propose stronger candidate rewrites. "
         "Your code will still be locally validated and benchmarked before any generated code is accepted."
     )
     key = st.text_input(
-        "Gemini API key",
+        "Ollama API key",
         type="password",
-        key=f"gemini_key_dialog_input_{source}",
+        key=f"ollama_key_dialog_input_{source}",
     )
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Use Gemini", key=f"use_gemini_{source}"):
-            st.session_state.pending_gemini_api_key = key.strip()
-            st.session_state.gemini_api_key = ""
-            st.session_state.gemini_prompt_decision = "accepted"
-            st.session_state.gemini_key_requested = False
+        if st.button("Use Ollama", key=f"use_ollama_{source}"):
+            st.session_state.pending_ollama_api_key = key.strip()
+            st.session_state.ollama_api_key = ""
+            st.session_state.ollama_prompt_decision = "accepted"
+            st.session_state.ollama_key_requested = False
             st.rerun()
     with col2:
-        if st.button("Continue without Gemini", key=f"skip_gemini_{source}"):
-            st.session_state.pending_gemini_api_key = ""
-            st.session_state.gemini_prompt_decision = "declined"
-            st.session_state.gemini_key_requested = False
+        if st.button("Continue without Ollama", key=f"skip_ollama_{source}"):
+            st.session_state.pending_ollama_api_key = ""
+            st.session_state.ollama_prompt_decision = "declined"
+            st.session_state.ollama_key_requested = False
             st.rerun()
 
 
-def _resolve_gemini_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
-    api_key = str(st.session_state.get("pending_gemini_api_key", "") or fallback_key or "").strip()
+def _resolve_ollama_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
+    api_key = str(
+        st.session_state.get("pending_ollama_api_key", "")
+        or fallback_key
+        or os.getenv("OLLAMA_API_KEY", "")
+        or ""
+    ).strip()
     if api_key:
-        st.session_state.pending_gemini_api_key = ""
-        st.session_state.gemini_prompt_decision = ""
-        st.session_state.gemini_key_requested = False
+        st.session_state.pending_ollama_api_key = ""
+        st.session_state.ollama_prompt_decision = ""
+        st.session_state.ollama_key_requested = False
         return api_key
 
     st.warning(
-        "For broader optimization search, add a Gemini API key. Gemini can explore more algorithmic rewrites "
+        "For broader optimization search, add an Ollama API key. Ollama can explore more algorithmic rewrites "
         "and edge-case-safe variants. If you continue without it, Complexity Lab will use its local deterministic "
         "optimizer and only display code that passes validation."
     )
@@ -368,11 +374,11 @@ def _run_scaling() -> None:
     _analyze_current(st.session_state.benchmark)
 
 
-def _generate_gemini_feedback(api_key: str) -> None:
+def _generate_ollama_feedback(api_key: str) -> None:
     if not st.session_state.analysis or not st.session_state.score or not st.session_state.plan:
         _analyze_current(st.session_state.benchmark)
     if st.session_state.analysis and st.session_state.score and st.session_state.plan:
-        st.session_state.gemini_text = enhance_with_gemini(
+        st.session_state.ollama_text = enhance_with_ollama(
             api_key=api_key,
             code=st.session_state.editor_code,
             analysis=st.session_state.analysis,
@@ -382,7 +388,7 @@ def _generate_gemini_feedback(api_key: str) -> None:
 
 
 def _build_verified_optimization_plan(api_key: str) -> None:
-    st.session_state.gemini_text = None
+    st.session_state.ollama_text = None
     if st.session_state.static_only_mode:
         st.session_state.benchmark = None
         st.info("Static-only mode is enabled, so Generate Optimization Plan skipped automatic benchmarking.")
@@ -399,7 +405,7 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     candidate_provider = None
     if api_key:
         def candidate_provider(level: str, rejection_reasons: List[str]):
-            return generate_optimized_code_with_gemini(
+            return generate_optimized_code_with_ollama(
                 api_key=api_key,
                 code=st.session_state.editor_code,
                 analysis=analysis,
@@ -426,12 +432,12 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     st.session_state.plan = plan
 
     if plan.generation_notes:
-        st.warning("Gemini candidate generation failed. Falling back to local verified optimizer.")
-        st.session_state.gemini_text = "\n".join(f"- {note}" for note in plan.generation_notes)
+        st.warning("Ollama candidate generation failed. Falling back to local verified optimizer.")
+        st.session_state.ollama_text = "\n".join(f"- {note}" for note in plan.generation_notes)
     elif api_key:
-        gemini_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "gemini"]
-        if gemini_candidates:
-            st.session_state.gemini_text = "Gemini generated level-specific candidates that were locally analyzed and benchmarked."
+        ollama_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "ollama"]
+        if ollama_candidates:
+            st.session_state.ollama_text = "Ollama generated level-specific candidates that were locally analyzed and benchmarked."
 
 
 def _save_current_record() -> None:
@@ -447,7 +453,7 @@ def _save_current_record() -> None:
         plan,
         st.session_state.benchmark,
         st.session_state.scaling,
-        st.session_state.gemini_text,
+        st.session_state.ollama_text,
     )
     record_id = save_analysis_record(
         session_name=st.session_state.practice_session,
@@ -914,7 +920,7 @@ def _render_optimization_tab(
 def _render_interview_tab(
     analysis: Optional[StaticAnalysisResult],
     plan: Optional[OptimizationPlan],
-    gemini_text: Optional[str],
+    ollama_text: Optional[str],
     answer_grade: Optional[InterviewGrade],
 ) -> None:
     if not analysis or not plan:
@@ -964,7 +970,7 @@ def _render_interview_tab(
         "Write your interview answer and grade it locally",
         key="interview_answer",
         height=160,
-        help="This local rubric does not call Gemini. It checks correctness language, complexity, edge cases, trade-offs, and communication length.",
+        help="This local rubric does not call Ollama. It checks correctness language, complexity, edge cases, trade-offs, and communication length.",
     )
     if st.button("Grade My Answer", width="stretch"):
         st.session_state.answer_grade = grade_interview_answer(st.session_state.interview_answer, analysis, plan)
@@ -985,9 +991,9 @@ def _render_interview_tab(
         with st.expander("Model answer"):
             st.write(answer_grade.model_answer)
 
-    if gemini_text:
-        st.markdown("#### Gemini-enhanced coaching")
-        st.markdown(gemini_text)
+    if ollama_text:
+        st.markdown("#### Ollama-enhanced coaching")
+        st.markdown(ollama_text)
 
 
 def _render_report_tab(
@@ -996,10 +1002,10 @@ def _render_report_tab(
     plan: Optional[OptimizationPlan],
     benchmark: Optional[BenchmarkResult],
     scaling: Optional[ScalingBenchmarkResult],
-    gemini_text: Optional[str],
+    ollama_text: Optional[str],
 ) -> None:
-    report = build_markdown_report(analysis, score, plan, benchmark, scaling, gemini_text)
-    html_report = build_html_report(analysis, score, plan, benchmark, scaling, gemini_text)
+    report = build_markdown_report(analysis, score, plan, benchmark, scaling, ollama_text)
+    html_report = build_html_report(analysis, score, plan, benchmark, scaling, ollama_text)
     download_cols = st.columns(2)
     with download_cols[0]:
         st.download_button(
@@ -1105,15 +1111,15 @@ def _render_algorithm_planner_tab() -> None:
         type="primary",
         key="algorithm_planner_generate_plan",
         width="stretch",
-        on_click=_queue_gemini_submit,
+        on_click=_queue_ollama_submit,
         args=("algorithm_planner_submit_pending",),
     )
 
     pending_submit = bool(st.session_state.get("algorithm_planner_submit_pending", False))
     if submitted or pending_submit:
-        current_api_key = _resolve_gemini_key_for_action(
+        current_api_key = _resolve_ollama_key_for_action(
             "algorithm_planner",
-            str(st.session_state.get("gemini_api_key", "") or ""),
+            str(st.session_state.get("ollama_api_key", "") or ""),
         )
         if current_api_key is None:
             return
@@ -1128,13 +1134,13 @@ def _render_algorithm_planner_tab() -> None:
     result = st.session_state.algorithm_planner_result
     if result:
         if result.source == "local":
-            st.info("No Gemini API key was provided, so this is a local estimated planning outline.")
+            st.info("No Ollama API key was provided, so this is a local estimated planning outline.")
         _render_algorithm_planner_result(result)
     else:
         render_empty_state("Enter a coding question and generate an optimization plan.")
 
 
-def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
+def _render_code_analyzer_workflow(ollama_api_key: str) -> None:
     st.markdown("#### Python Code")
     st.text_area(
         "Paste Python code",
@@ -1155,7 +1161,7 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
             "Generate Optimization Plan",
             key="code_analyzer_generate_plan",
             width="stretch",
-            on_click=_queue_gemini_submit,
+            on_click=_queue_ollama_submit,
             args=("code_analyzer_plan_submit_pending",),
         )
     with action_cols[4]:
@@ -1164,20 +1170,20 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
     if analyze_clicked:
         with st.spinner("Analyzing AST features and estimating complexity..."):
             st.session_state.benchmark = None
-            st.session_state.gemini_text = None
+            st.session_state.ollama_text = None
             _analyze_current(None, autofill_benchmark_input=True)
             _rerun()
     if benchmark_clicked:
         with st.spinner("Running guarded benchmarks with timing and memory tracing..."):
-            st.session_state.gemini_text = None
+            st.session_state.ollama_text = None
             _run_benchmark()
     if scaling_clicked:
         with st.spinner("Running generated input-size scaling experiments..."):
-            st.session_state.gemini_text = None
+            st.session_state.ollama_text = None
             _run_scaling()
     pending_plan_click = bool(st.session_state.get("code_analyzer_plan_submit_pending", False))
     if plan_clicked or pending_plan_click:
-        current_api_key = _resolve_gemini_key_for_action("code_analyzer", gemini_api_key)
+        current_api_key = _resolve_ollama_key_for_action("code_analyzer", ollama_api_key)
         if current_api_key is None:
             return
         st.session_state.code_analyzer_plan_submit_pending = False
@@ -1191,7 +1197,7 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
     scaling_state = st.session_state.scaling
     score_state = st.session_state.score
     plan_state = st.session_state.plan
-    gemini_state = st.session_state.gemini_text
+    ollama_state = st.session_state.ollama_text
     answer_grade_state = st.session_state.answer_grade
 
     _render_summary_metrics(analysis_state, score_state, benchmark_state)
@@ -1204,9 +1210,9 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
     with tabs[2]:
         _render_optimization_tab(analysis_state, score_state, plan_state)
     with tabs[3]:
-        _render_interview_tab(analysis_state, plan_state, gemini_state, answer_grade_state)
+        _render_interview_tab(analysis_state, plan_state, ollama_state, answer_grade_state)
     with tabs[4]:
-        _render_report_tab(analysis_state, score_state, plan_state, benchmark_state, scaling_state, gemini_state)
+        _render_report_tab(analysis_state, score_state, plan_state, benchmark_state, scaling_state, ollama_state)
     with tabs[5]:
         _render_progress_tab()
 
@@ -1326,16 +1332,16 @@ def main() -> None:
         st.selectbox("Scaling input shape", ["list", "string", "matrix", "dict", "graph"], key="scaling_shape")
         st.text_input("Scaling sizes", value="10,100,500", key="scaling_sizes")
         st.select_slider("Input-size mindset", options=["Tiny", "Small", "Medium", "Large", "Stress"], value="Small")
-        gemini_api_key = st.text_input(
-            "Gemini API key (optional)",
-            key=_gemini_key_widget_key(),
+        ollama_api_key = st.text_input(
+            "Ollama API key (optional)",
+            key=_ollama_key_widget_key(),
             type="password",
             help=(
                 "Used only for the current Streamlit request to enhance feedback and the Algorithm Planner. "
-                "It is not saved to history or reports."
+                "It is not saved to history or reports. You can also set OLLAMA_API_KEY in your environment."
             ),
         )
-        st.session_state.gemini_api_key = gemini_api_key
+        st.session_state.ollama_api_key = ollama_api_key
         st.caption("Execution protections are best-effort and intended for interview-prep snippets.")
 
     _render_hero()
@@ -1344,7 +1350,7 @@ def main() -> None:
     with workflow_tabs[0]:
         _render_algorithm_planner_tab()
     with workflow_tabs[1]:
-        _render_code_analyzer_workflow(gemini_api_key)
+        _render_code_analyzer_workflow(ollama_api_key)
 
 
 if __name__ == "__main__":

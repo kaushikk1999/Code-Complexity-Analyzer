@@ -52,7 +52,7 @@ def test_rejects_lower_score_same_complexity_candidate():
     analysis = analyze_code(WORD_BREAK_ORIGINAL)
     score = calculate_optimization_score(analysis)
     candidate = OptimizedCodeCandidate(
-        source="gemini",
+        source="ollama",
         code=WORD_BREAK_WORSE_CANDIDATE,
         explanation="More verbose same-complexity rewrite.",
         confidence=0.90,
@@ -91,7 +91,7 @@ def test_candidate_benchmark_must_not_be_slower(monkeypatch):
     analysis = analyze_code(code)
     score = calculate_optimization_score(analysis)
     candidate = OptimizedCodeCandidate(
-        source="gemini",
+        source="ollama",
         code="def total(values):\n    acc = 0\n    for value in values:\n        acc += value\n    return acc\n",
         explanation="Same static quality but slower in benchmark.",
         confidence=0.90,

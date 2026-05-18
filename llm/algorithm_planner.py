@@ -11,18 +11,14 @@ from typing import Any, Dict, List, Optional
 from analyzer import analyze_code
 from benchmarking import run_benchmark
 from benchmarking.sandbox import validate_code_for_execution
+from llm.ollama_errors import (
+    OLLAMA_HOST,
+    classify_ollama_error,
+    model_candidates,
+    ollama_error_message,
+)
 from optimization.planner import generate_verified_optimization_candidates
 from scoring import calculate_optimization_score
-
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
-GEMINI_MODEL_FALLBACKS = (
-    DEFAULT_GEMINI_MODEL,
-    "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-)
 
 PLANNER_OUTPUT_LABELS = (
     "Problem Understanding",
@@ -41,8 +37,8 @@ COMPLEXITY_NOTE = (
 )
 
 
-class GeminiPlannerError(Exception):
-    """Sanitized Gemini failure category for UI-safe error handling."""
+class OllamaPlannerError(Exception):
+    """Sanitized Ollama failure category for UI-safe error handling."""
 
     def __init__(self, category: str = "request_failed") -> None:
         super().__init__(category)
@@ -102,7 +98,7 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
             raise
         payload = json.loads(clean[start : end + 1])
     if not isinstance(payload, dict):
-        raise ValueError("Gemini did not return a JSON object.")
+        raise ValueError("Ollama did not return a JSON object.")
     return payload
 
 
@@ -250,7 +246,7 @@ def _local_choice(question: str) -> tuple[str, str, str]:
             "Estimated: O(1)",
         )
     return (
-        "Problem-dependent; provide a Gemini API key for a tailored optimized solution.",
+        "Problem-dependent; provide an Ollama API key for a tailored optimized solution.",
         "Estimated: problem-dependent",
         "Estimated: problem-dependent",
     )
@@ -262,7 +258,7 @@ def _local_plan(question: str) -> AlgorithmPlannerResult:
         valid=True,
         source="local",
         problem_understanding=(
-            "Local mode received a natural-language coding problem. Without Gemini, the app avoids "
+            "Local mode received a natural-language coding problem. Without Ollama, the app avoids "
             "inventing a full solution and provides only a conservative optimization outline."
         ),
         step_by_step_optimization_plan=[
@@ -307,106 +303,81 @@ Rules:
 
 
 def _model_candidates() -> List[str]:
-    candidates = [os.getenv("GEMINI_MODEL", "").strip(), *GEMINI_MODEL_FALLBACKS]
-    unique_candidates: List[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if candidate and candidate not in seen:
-            unique_candidates.append(candidate)
-            seen.add(candidate)
-    return unique_candidates
+    return model_candidates()
 
 
-def _classify_gemini_error(exc: Exception) -> str:
-    error_text = f"{type(exc).__name__} {exc}".lower()
-    if any(marker in error_text for marker in ("quota", "rate limit", "rate_limit", "429", "resource_exhausted")):
-        return "quota"
-    if ("model" in error_text or "models/" in error_text) and any(
-        marker in error_text
-        for marker in (
-            "not found",
-            "unavailable",
-            "unsupported",
-            "not supported",
-            "permission denied",
-            "not enabled",
-            "404",
-        )
-    ):
-        return "model_unavailable"
-    if any(
-        marker in error_text
-        for marker in (
-            "api key",
-            "apikey",
-            "bad key",
-            "invalid key",
-            "unauthenticated",
-            "authentication",
-            "permission denied",
-            "401",
-            "403",
-        )
-    ):
-        return "invalid_key"
-    return "request_failed"
+def _classify_ollama_error(exc: Exception) -> str:
+    return classify_ollama_error(exc)
 
 
-def _gemini_error_message(category: str) -> str:
-    messages = {
-        "invalid_key": "Gemini rejected the API key. Check that it is active in Google AI Studio.",
-        "quota": "Gemini free-tier quota or rate limit was reached. Try again later.",
-        "model_unavailable": "The selected Gemini model is unavailable for this key. The app tried fallback models.",
-        "malformed_response": "Gemini responded, but not in the expected planner format. Try again.",
-        "missing_package": "The Google Gen AI SDK is not installed. Install google-genai and try again.",
+def _ollama_error_message(category: str) -> str:
+    message = ollama_error_message(category)
+    if category == "malformed_response":
+        return "Ollama responded, but not in the expected planner format. Try again."
+    return message
+
+
+def _extract_message_text(response: Any) -> str:
+    message = getattr(response, "message", None)
+    if message is not None:
+        content = getattr(message, "content", None)
+        if content:
+            return str(content).strip()
+    if isinstance(response, dict):
+        message_dict = response.get("message")
+        if isinstance(message_dict, dict):
+            return str(message_dict.get("content", "") or "").strip()
+    return ""
+
+
+def _generate_content(client: Any, model_name: str, prompt: str, json_mode: bool) -> str:
+    request: Dict[str, Any] = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
     }
-    return messages.get(category, "Gemini request failed. Check the API key and try again.")
+    if json_mode:
+        request["format"] = "json"
+    return _extract_message_text(client.chat(**request))
 
 
-def _generate_content(client: Any, model_name: str, prompt: str, config: Any) -> Any:
-    return client.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=config,
-    )
-
-
-def _generate_with_gemini(question: str, api_key: str) -> Dict[str, Any]:
+def _generate_with_ollama(question: str, api_key: str) -> Dict[str, Any]:
     # The API key is used only to construct this request-scoped client.
+    api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
+    if not api_key:
+        raise OllamaPlannerError("invalid_key")
     try:
-        from google import genai
-        from google.genai import types
+        from ollama import Client
     except ImportError as exc:
-        raise GeminiPlannerError("missing_package") from exc
+        raise OllamaPlannerError("missing_package") from exc
 
-    client = genai.Client(api_key=api_key)
+    client = Client(host=OLLAMA_HOST, headers={"Authorization": f"Bearer {api_key}"})
     prompt = _planner_prompt(question)
-    config = types.GenerateContentConfig(response_mime_type="application/json")
     last_model_error: Exception | None = None
 
     for model_name in _model_candidates():
         try:
-            response = _generate_content(client, model_name, prompt, config)
+            text = _generate_content(client, model_name, prompt, json_mode=True)
         except Exception as exc:
-            category = _classify_gemini_error(exc)
+            category = _classify_ollama_error(exc)
             if category == "model_unavailable":
                 last_model_error = exc
                 continue
-            raise GeminiPlannerError(category) from exc
+            raise OllamaPlannerError(category) from exc
 
         try:
-            return _extract_json_object(getattr(response, "text", "") or "")
+            return _extract_json_object(text)
         except (json.JSONDecodeError, ValueError) as exc:
-            raise GeminiPlannerError("malformed_response") from exc
+            raise OllamaPlannerError("malformed_response") from exc
 
-    raise GeminiPlannerError("model_unavailable") from last_model_error
+    raise OllamaPlannerError("model_unavailable") from last_model_error
 
 
-def _safe_gemini_failure(category: str) -> AlgorithmPlannerResult:
+def _safe_ollama_failure(category: str) -> AlgorithmPlannerResult:
     return AlgorithmPlannerResult(
         valid=False,
-        source="gemini",
-        error=_gemini_error_message(category),
+        source="ollama",
+        error=_ollama_error_message(category),
     )
 
 
@@ -417,7 +388,7 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
 
     result = AlgorithmPlannerResult(
         valid=True,
-        source="gemini",
+        source="ollama",
         problem_understanding=str(payload.get("problem_understanding", "")).strip(),
         step_by_step_optimization_plan=_coerce_string_list(payload.get("step_by_step_optimization_plan", [])),
         best_data_structure_algorithm_choice=str(payload.get("best_data_structure_algorithm_choice", "")).strip(),
@@ -430,7 +401,7 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
 
     if not code:
         result.valid = False
-        result.error = "Gemini did not return optimized Python code."
+        result.error = "Ollama did not return optimized Python code."
         return result
 
     violations = validate_code_for_execution(code)
@@ -468,7 +439,7 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
 
 def generate_algorithm_optimization_plan(question: str, api_key: str = "") -> AlgorithmPlannerResult:
     question = (question or "").strip()
-    api_key = (api_key or "").strip()
+    api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
     if not question:
         return AlgorithmPlannerResult(
             valid=False,
@@ -480,13 +451,13 @@ def generate_algorithm_optimization_plan(question: str, api_key: str = "") -> Al
         return _local_plan(question)
 
     try:
-        payload = _generate_with_gemini(question, api_key)
-    except GeminiPlannerError as exc:
+        payload = _generate_with_ollama(question, api_key)
+    except OllamaPlannerError as exc:
         if exc.category == "quota":
             result = _local_plan(question)
-            result.error = "Gemini free-tier quota was exhausted, so Complexity Lab generated a local fallback plan."
+            result.error = "Ollama quota was exhausted, so Complexity Lab generated a local fallback plan."
             return result
-        return _safe_gemini_failure(exc.category)
+        return _safe_ollama_failure(exc.category)
     except Exception as exc:
-        return _safe_gemini_failure(_classify_gemini_error(exc))
+        return _safe_ollama_failure(_classify_ollama_error(exc))
     return _result_from_payload(payload)

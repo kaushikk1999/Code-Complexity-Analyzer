@@ -16,7 +16,7 @@ The app is designed as a polished portfolio-grade dashboard rather than a plain 
 - Efficiency percentage, severity label, improvement potential, and ranked bottlenecks.
 - Step-by-step optimization guidance grouped into quick wins, medium refactors, and advanced improvements, with rewrite confidence and validation tests where safe.
 - Interview mode with follow-up questions, answer grading rubric, model answer, suggested explanation wording, and trade-off notes.
-- Optional Gemini-enhanced narrative coaching grounded in local JSON facts.
+- Optional Ollama Cloud-enhanced narrative coaching grounded in local JSON facts.
 - SQLite-backed practice history, named sessions, and progress dashboard.
 - Downloadable markdown and HTML reports plus copyable LinkedIn/GitHub summary.
 - Dark-mode-friendly custom theme, gradient hero, metric cards, badges, tabs, and responsive layout.
@@ -38,7 +38,7 @@ benchmarking/
 interview/
   coaching.py
 llm/
-  gemini_helper.py
+  ollama_helper.py
 optimization/
   planner.py
 scoring/
@@ -72,7 +72,7 @@ Business logic is kept outside the Streamlit view layer:
 - `interview/` owns local follow-up questions and answer grading.
 - `visualization/` owns CSS, HTML helpers, and Plotly chart construction.
 - `utils/history_store.py` owns SQLite-backed practice history.
-- `llm/` contains optional Gemini narrative enhancement only.
+- `llm/` contains optional Ollama Cloud narrative enhancement only.
 
 ## UI Design Approach
 
@@ -157,26 +157,35 @@ No Node.js build, frontend server, paid API key, `runtime.txt`, or Linux `packag
 
 For public deployments, enable `Static-only public mode` in the sidebar when demonstrating with untrusted code. This disables benchmark execution while preserving static analysis, scoring, reports, and interview coaching.
 
-## Gemini Setup
+## Ollama Cloud Setup
 
-Gemini is optional. The app works fully without it.
+Ollama Cloud is optional. The app works fully without it.
 
-To use Gemini-enhanced coaching:
+To use Ollama-enhanced coaching with `gpt-oss:120b` on Ollama Cloud:
 
 1. Install dependencies from `requirements.txt`.
-2. Paste a Gemini API key into the sidebar field.
+2. Paste an Ollama API key into the sidebar field, or set it before launching:
+
+   ```bash
+   export OLLAMA_API_KEY="your_ollama_api_key"
+   ```
+
 3. Click `Generate Optimization Plan`.
 
-Gemini receives a compact JSON object of local facts and is used only to improve natural-language explanations and interview coaching. It is not used for:
+Ollama receives a compact JSON object of local facts and is used only to improve natural-language explanations, generated optimization candidates, and interview coaching. It is not used for:
 
 - benchmark timing,
 - memory measurement,
 - static complexity estimates,
 - optimization scoring.
 
-The default model name is read from `GEMINI_MODEL`, then falls back through `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, `gemini-2.5-flash-lite`, `gemini-2.0-flash-lite`, `gemini-2.5-flash`, and `gemini-2.0-flash`.
+The default model is `gpt-oss:120b`, with `gpt-oss:20b` as a fallback. Override it with:
 
-Free-tier Gemini API projects can still hit per-model or per-project RPM, TPM, or daily limits. When Algorithm Planner receives a Gemini quota or rate-limit response, Complexity Lab returns a local fallback optimization plan instead of blocking the workflow with a hard error.
+```bash
+export OLLAMA_MODEL="the-exact-model-used-in-n8n"
+```
+
+Ollama API projects can still hit model, account, or rate limits. When Algorithm Planner receives an Ollama quota or rate-limit response, Complexity Lab returns a local fallback optimization plan instead of blocking the workflow with a hard error.
 
 ## Estimated vs Measured Metrics
 
