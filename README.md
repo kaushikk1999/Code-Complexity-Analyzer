@@ -172,7 +172,7 @@ To use Ollama-enhanced coaching with `qwen3-coder-next:cloud` on Ollama Cloud:
 
    `.env` is ignored by git, so the key is not committed.
 
-3. Click `Generate Optimization Plan`. The sidebar API-key field remains available as a temporary current-session override.
+3. Click `Generate Optimization Plan`. The app reads the key automatically from `.env` or the environment.
 
 Ollama receives a compact JSON object of local facts and is used only to improve natural-language explanations, generated optimization candidates, and interview coaching. It is not used for:
 

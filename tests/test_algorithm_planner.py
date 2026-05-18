@@ -157,19 +157,19 @@ def test_benchmark_planner_solution_uses_peak_runtime_label_only():
     assert "Average Runtime" not in PLANNER_OUTPUT_LABELS
 
 
-def test_algorithm_planner_reuses_sidebar_ollama_key_input():
+def test_algorithm_planner_uses_env_key_without_sidebar_ollama_key_input():
     app_source = Path("app.py").read_text(encoding="utf-8")
     planner_body = app_source.split("def _render_algorithm_planner_tab", 1)[1].split(
         "def _render_code_analyzer_workflow", 1
     )[0]
 
     assert '"Ollama API Key"' not in planner_body
+    assert "Ollama API key (optional)" not in app_source
     assert "st.text_input(" not in planner_body
     assert "_resolve_ollama_key_for_action" in planner_body
     assert "_queue_ollama_submit" in planner_body
-    assert "key=_ollama_key_widget_key()" in app_source
-    assert 'st.session_state.ollama_api_key = ""' in app_source
-    assert "del st.session_state[widget_key]" in app_source
+    assert "_ollama_key_widget_key" not in app_source
+    assert "pending_ollama_api_key" not in app_source
 
 
 def test_algorithm_planner_uses_fixed_qwen_model(monkeypatch):

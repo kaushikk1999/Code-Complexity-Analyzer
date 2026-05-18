@@ -104,10 +104,6 @@ def _initialize_state() -> None:
         "code_analyzer_plan_submit_pending": False,
         "benchmark_input_widget_version": 0,
         "ollama_api_key": "",
-        "ollama_api_key_widget_version": 0,
-        "pending_ollama_api_key": "",
-        "ollama_prompt_decision": "",
-        "ollama_key_requested": False,
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
@@ -134,69 +130,18 @@ def _clear_outputs() -> None:
     st.session_state.generated_test_cases = []
 
 
-def _ollama_key_widget_key() -> str:
-    version = int(st.session_state.get("ollama_api_key_widget_version", 0) or 0)
-    return f"ollama_api_key_input_{version}"
-
-
 def _queue_ollama_submit(flag_key: str) -> None:
-    widget_key = _ollama_key_widget_key()
-    st.session_state.pending_ollama_api_key = str(
-        st.session_state.get(widget_key, "") or st.session_state.get("ollama_api_key", "") or ""
-    )
-    st.session_state.ollama_api_key = ""
-    if widget_key in st.session_state:
-        del st.session_state[widget_key]
-    st.session_state.ollama_api_key_widget_version = int(
-        st.session_state.get("ollama_api_key_widget_version", 0) or 0
-    ) + 1
     st.session_state[flag_key] = True
 
 
-@st.dialog("Unlock stronger optimization with Ollama")
-def _ollama_key_dialog(source: str) -> None:
-    st.write(
-        "Ollama Cloud can search a wider optimization space and propose stronger candidate rewrites. "
-        "Your code will still be locally validated and benchmarked before any generated code is accepted."
-    )
-    key = st.text_input(
-        "Ollama API key",
-        type="password",
-        key=f"ollama_key_dialog_input_{source}",
-    )
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Use Ollama", key=f"use_ollama_{source}"):
-            st.session_state.pending_ollama_api_key = key.strip()
-            st.session_state.ollama_api_key = ""
-            st.session_state.ollama_prompt_decision = "accepted"
-            st.session_state.ollama_key_requested = False
-            st.rerun()
-    with col2:
-        if st.button("Continue without Ollama", key=f"skip_ollama_{source}"):
-            st.session_state.pending_ollama_api_key = ""
-            st.session_state.ollama_prompt_decision = "declined"
-            st.session_state.ollama_key_requested = False
-            st.rerun()
-
-
 def _resolve_ollama_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
-    api_key = str(
-        st.session_state.get("pending_ollama_api_key", "")
-        or fallback_key
-        or os.getenv("OLLAMA_API_KEY", "")
-        or ""
-    ).strip()
+    api_key = str(fallback_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
     if api_key:
-        st.session_state.pending_ollama_api_key = ""
-        st.session_state.ollama_prompt_decision = ""
-        st.session_state.ollama_key_requested = False
         return api_key
 
     st.warning(
-        "For broader optimization search, add an Ollama API key. Ollama can explore more algorithmic rewrites "
-        "and edge-case-safe variants. If you continue without it, Complexity Lab will use its local deterministic "
-        "optimizer and only display code that passes validation."
+        "Ollama API key is not configured. Add OLLAMA_API_KEY to the local .env file to enable Qwen-powered "
+        "optimization. Complexity Lab will use its local deterministic optimizer for this run."
     )
     return ""
 
@@ -1119,7 +1064,6 @@ def _render_algorithm_planner_tab() -> None:
     if submitted or pending_submit:
         current_api_key = _resolve_ollama_key_for_action(
             "algorithm_planner",
-            str(st.session_state.get("ollama_api_key", "") or ""),
         )
         if current_api_key is None:
             return
@@ -1133,14 +1077,12 @@ def _render_algorithm_planner_tab() -> None:
 
     result = st.session_state.algorithm_planner_result
     if result:
-        if result.source == "local":
-            st.info("No Ollama API key was provided, so this is a local estimated planning outline.")
         _render_algorithm_planner_result(result)
     else:
         render_empty_state("Enter a coding question and generate an optimization plan.")
 
 
-def _render_code_analyzer_workflow(ollama_api_key: str) -> None:
+def _render_code_analyzer_workflow() -> None:
     st.markdown("#### Python Code")
     st.text_area(
         "Paste Python code",
@@ -1183,7 +1125,7 @@ def _render_code_analyzer_workflow(ollama_api_key: str) -> None:
             _run_scaling()
     pending_plan_click = bool(st.session_state.get("code_analyzer_plan_submit_pending", False))
     if plan_clicked or pending_plan_click:
-        current_api_key = _resolve_ollama_key_for_action("code_analyzer", ollama_api_key)
+        current_api_key = _resolve_ollama_key_for_action("code_analyzer")
         if current_api_key is None:
             return
         st.session_state.code_analyzer_plan_submit_pending = False
@@ -1332,16 +1274,6 @@ def main() -> None:
         st.selectbox("Scaling input shape", ["list", "string", "matrix", "dict", "graph"], key="scaling_shape")
         st.text_input("Scaling sizes", value="10,100,500", key="scaling_sizes")
         st.select_slider("Input-size mindset", options=["Tiny", "Small", "Medium", "Large", "Stress"], value="Small")
-        ollama_api_key = st.text_input(
-            "Ollama API key (optional)",
-            key=_ollama_key_widget_key(),
-            type="password",
-            help=(
-                "Optional current-session override. By default, the app reads OLLAMA_API_KEY from your local .env "
-                "or environment. Keys are not saved to history or reports."
-            ),
-        )
-        st.session_state.ollama_api_key = ollama_api_key
         st.caption("Execution protections are best-effort and intended for interview-prep snippets.")
 
     _render_hero()
@@ -1350,7 +1282,7 @@ def main() -> None:
     with workflow_tabs[0]:
         _render_algorithm_planner_tab()
     with workflow_tabs[1]:
-        _render_code_analyzer_workflow(ollama_api_key)
+        _render_code_analyzer_workflow()
 
 
 if __name__ == "__main__":
