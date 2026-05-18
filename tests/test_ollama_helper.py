@@ -64,7 +64,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. Check that your account can access deepseek-v4-flash:cloud.",
+            "Ollama Cloud request failed for the selected model. DeepSeek-V4-Flash may require a subscription; the app will try qwen3-coder-next:cloud as a fallback.",
         ),
     ],
 )
@@ -150,7 +150,7 @@ def test_successful_structured_optimized_code_generation(monkeypatch):
     assert candidate.validation_tests == ["assert two_sum([2, 7], 9) == [0, 1]"]
 
 
-def test_ollama_helper_uses_only_deepseek_flash_model(monkeypatch):
+def test_ollama_helper_uses_deepseek_flash_first(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -178,7 +178,7 @@ def test_ollama_helper_uses_only_deepseek_flash_model(monkeypatch):
     assert calls == ["deepseek-v4-flash:cloud"]
 
 
-def test_ollama_helper_does_not_fallback_when_deepseek_flash_is_unavailable(monkeypatch):
+def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -192,15 +192,16 @@ def test_ollama_helper_does_not_fallback_when_deepseek_flash_is_unavailable(monk
 
     def fake_generate_content(client, model_name: str, prompt: str, json_mode=False):
         calls.append(model_name)
-        raise RuntimeError("this model requires a subscription (status code: 403)")
+        if model_name == "deepseek-v4-flash:cloud":
+            raise RuntimeError("this model requires a subscription (status code: 403)")
+        return '{"ok": true}'
 
     monkeypatch.setattr(ollama_helper, "_generate_content", fake_generate_content)
 
-    with pytest.raises(ollama_helper.OllamaHelperError) as exc_info:
-        ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
+    text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
-    assert exc_info.value.category == "model_unavailable"
-    assert calls == ["deepseek-v4-flash:cloud"]
+    assert text == '{"ok": true}'
+    assert calls == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
 
 
 def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
@@ -208,7 +209,7 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates == ["deepseek-v4-flash:cloud"]
+    assert candidates == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
 
 
 def test_generate_optimized_code_uses_env_api_key(monkeypatch):
