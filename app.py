@@ -1337,8 +1337,8 @@ def main() -> None:
             key=_ollama_key_widget_key(),
             type="password",
             help=(
-                "Used only for the current Streamlit request to enhance feedback and the Algorithm Planner. "
-                "It is not saved to history or reports. You can also set OLLAMA_API_KEY in your environment."
+                "Optional current-session override. By default, the app reads OLLAMA_API_KEY from your local .env "
+                "or environment. Keys are not saved to history or reports."
             ),
         )
         st.session_state.ollama_api_key = ollama_api_key

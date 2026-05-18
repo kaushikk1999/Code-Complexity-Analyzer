@@ -64,7 +64,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. Check model access or set OLLAMA_MODEL to the exact model used in n8n.",
+            "Ollama Cloud request failed for the selected model. Check that your account can access qwen3-coder-next:cloud.",
         ),
     ],
 )
@@ -150,7 +150,7 @@ def test_successful_structured_optimized_code_generation(monkeypatch):
     assert candidate.validation_tests == ["assert two_sum([2, 7], 9) == [0, 1]"]
 
 
-def test_ollama_helper_model_fallback_tries_next_model(monkeypatch):
+def test_ollama_helper_uses_fixed_qwen_model(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -168,8 +168,6 @@ def test_ollama_helper_model_fallback_tries_next_model(monkeypatch):
         calls.append(model_name)
         assert json_mode
         assert client.host == "https://ollama.com"
-        if model_name in {"unavailable-model", "gpt-oss:120b"}:
-            raise RuntimeError("model not found")
         return '{"ok": true}'
 
     monkeypatch.setattr(ollama_helper, "_generate_content", fake_generate_content)
@@ -177,19 +175,49 @@ def test_ollama_helper_model_fallback_tries_next_model(monkeypatch):
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls[:3] == ["unavailable-model", "gpt-oss:120b", "gpt-oss:20b"]
+    assert calls == ["qwen3-coder-next:cloud"]
 
 
-def test_ollama_helper_model_candidates_start_with_env_override_then_cloud_fallbacks(monkeypatch):
+def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", "custom-model")
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates[:3] == [
-        "custom-model",
-        "gpt-oss:120b",
-        "gpt-oss:20b",
-    ]
+    assert candidates == ["qwen3-coder-next:cloud"]
+
+
+def test_generate_optimized_code_uses_env_api_key(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    analysis, score, plan = _fixtures()
+    monkeypatch.setenv("OLLAMA_API_KEY", secret)
+
+    def success(api_key: str, prompt: str, *, json_mode: bool = False):
+        assert api_key == secret
+        assert json_mode
+        return json.dumps(
+            {
+                "step_by_step_plan": [],
+                "optimized_code": "def two_sum(nums, target):\n    return []\n",
+                "explanation": "",
+                "validation_tests": [],
+                "expected_time": "O(n)",
+                "expected_space": "O(1)",
+            }
+        )
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", success)
+
+    candidate, error = ollama_helper.generate_optimized_code_with_ollama(
+        "",
+        analysis.raw_code,
+        analysis,
+        score,
+        plan,
+        entrypoint="two_sum",
+    )
+
+    assert error is None
+    assert candidate is not None
 
 
 @pytest.mark.parametrize(

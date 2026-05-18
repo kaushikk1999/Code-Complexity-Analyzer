@@ -161,16 +161,18 @@ For public deployments, enable `Static-only public mode` in the sidebar when dem
 
 Ollama Cloud is optional. The app works fully without it.
 
-To use Ollama-enhanced coaching with `gpt-oss:120b` on Ollama Cloud:
+To use Ollama-enhanced coaching with `qwen3-coder-next:cloud` on Ollama Cloud:
 
 1. Install dependencies from `requirements.txt`.
-2. Paste an Ollama API key into the sidebar field, or set it before launching:
+2. Create a local `.env` file in the project root:
 
    ```bash
-   export OLLAMA_API_KEY="your_ollama_api_key"
+   OLLAMA_API_KEY=your_ollama_api_key
    ```
 
-3. Click `Generate Optimization Plan`.
+   `.env` is ignored by git, so the key is not committed.
+
+3. Click `Generate Optimization Plan`. The sidebar API-key field remains available as a temporary current-session override.
 
 Ollama receives a compact JSON object of local facts and is used only to improve natural-language explanations, generated optimization candidates, and interview coaching. It is not used for:
 
@@ -179,11 +181,7 @@ Ollama receives a compact JSON object of local facts and is used only to improve
 - static complexity estimates,
 - optimization scoring.
 
-The default model is `gpt-oss:120b`, with `gpt-oss:20b` as a fallback. Override it with:
-
-```bash
-export OLLAMA_MODEL="the-exact-model-used-in-n8n"
-```
+The fixed Ollama Cloud model is `qwen3-coder-next:cloud`.
 
 Ollama API projects can still hit model, account, or rate limits. When Algorithm Planner receives an Ollama quota or rate-limit response, Complexity Lab returns a local fallback optimization plan instead of blocking the workflow with a hard error.
 

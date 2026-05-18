@@ -55,7 +55,7 @@ def test_ollama_failure_is_sanitized_and_does_not_leak_key(monkeypatch):
     [
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. Check model access or set OLLAMA_MODEL to the exact model used in n8n.",
+            "Ollama Cloud request failed for the selected model. Check that your account can access qwen3-coder-next:cloud.",
         ),
         ("malformed_response", "Ollama responded, but not in the expected planner format. Try again."),
     ],
@@ -172,7 +172,7 @@ def test_algorithm_planner_reuses_sidebar_ollama_key_input():
     assert "del st.session_state[widget_key]" in app_source
 
 
-def test_model_fallback_tries_next_model_after_unavailable(monkeypatch):
+def test_algorithm_planner_uses_fixed_qwen_model(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -200,8 +200,6 @@ def test_model_fallback_tries_next_model_after_unavailable(monkeypatch):
         calls.append(model_name)
         assert json_mode
         assert client.host == "https://ollama.com"
-        if model_name in {"unavailable-model", "gpt-oss:120b"}:
-            raise RuntimeError("model not found")
         return json.dumps(payload)
 
     monkeypatch.setattr(algorithm_planner, "_generate_content", fake_generate_content)
@@ -209,16 +207,12 @@ def test_model_fallback_tries_next_model_after_unavailable(monkeypatch):
     result = algorithm_planner._generate_with_ollama("Return the input.", "SECRET_TEST_KEY")
 
     assert result["problem_understanding"] == "Fallback worked."
-    assert calls[:3] == ["unavailable-model", "gpt-oss:120b", "gpt-oss:20b"]
+    assert calls == ["qwen3-coder-next:cloud"]
 
 
-def test_model_candidates_start_with_env_override_then_cloud_fallbacks(monkeypatch):
+def test_model_candidates_ignore_env_override(monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", "custom-model")
 
     candidates = algorithm_planner._model_candidates()
 
-    assert candidates[:3] == [
-        "custom-model",
-        "gpt-oss:120b",
-        "gpt-oss:20b",
-    ]
+    assert candidates == ["qwen3-coder-next:cloud"]

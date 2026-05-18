@@ -1,3 +1,4 @@
 streamlit>=1.50,<2.0
 plotly>=5.18
 ollama>=0.6.0
+python-dotenv>=1.0
