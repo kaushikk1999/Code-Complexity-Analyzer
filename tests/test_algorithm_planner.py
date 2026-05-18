@@ -55,7 +55,7 @@ def test_ollama_failure_is_sanitized_and_does_not_leak_key(monkeypatch):
     [
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. DeepSeek-V4-Pro may require a subscription; the app will try qwen3-coder-next:cloud as a fallback.",
+            "Ollama Cloud request failed for the selected model. Check that your account can access deepseek-v4-flash:cloud.",
         ),
         ("malformed_response", "Ollama responded, but not in the expected planner format. Try again."),
     ],
@@ -172,7 +172,7 @@ def test_algorithm_planner_uses_env_key_without_sidebar_ollama_key_input():
     assert "pending_ollama_api_key" not in app_source
 
 
-def test_algorithm_planner_falls_back_to_qwen_when_deepseek_is_unavailable(monkeypatch):
+def test_algorithm_planner_uses_only_deepseek_flash_model(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -200,8 +200,6 @@ def test_algorithm_planner_falls_back_to_qwen_when_deepseek_is_unavailable(monke
         calls.append(model_name)
         assert json_mode
         assert client.host == "https://ollama.com"
-        if model_name == "deepseek-v4-pro:cloud":
-            raise RuntimeError("this model requires a subscription (status code: 403)")
         return json.dumps(payload)
 
     monkeypatch.setattr(algorithm_planner, "_generate_content", fake_generate_content)
@@ -209,7 +207,7 @@ def test_algorithm_planner_falls_back_to_qwen_when_deepseek_is_unavailable(monke
     result = algorithm_planner._generate_with_ollama("Return the input.", "SECRET_TEST_KEY")
 
     assert result["problem_understanding"] == "Fallback worked."
-    assert calls == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
+    assert calls == ["deepseek-v4-flash:cloud"]
 
 
 def test_model_candidates_ignore_env_override(monkeypatch):
@@ -217,4 +215,4 @@ def test_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = algorithm_planner._model_candidates()
 
-    assert candidates == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
+    assert candidates == ["deepseek-v4-flash:cloud"]
