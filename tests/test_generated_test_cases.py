@@ -2,7 +2,12 @@ import json
 
 from benchmarking import run_benchmark
 from utils.entrypoints import discover_entrypoints
-from utils.test_case_generator import build_benchmark_batch_input, generate_test_cases
+from utils.test_case_generator import (
+    DEFAULT_BENCHMARK_CASE_COUNT,
+    build_benchmark_batch_input,
+    generate_test_cases,
+    merge_generated_and_custom_benchmark_input,
+)
 
 WORD_BREAK_CODE = """
 from typing import List
@@ -43,7 +48,7 @@ def test_generates_word_break_cases():
         definitions=definitions,
     )
 
-    assert len(cases) == 5
+    assert len(cases) == DEFAULT_BENCHMARK_CASE_COUNT
     assert any("leetcode" in case.benchmark_input for case in cases)
     assert any("catsandog" in case.benchmark_input for case in cases)
 
@@ -56,7 +61,7 @@ def test_wordbreak_generated_cases_are_kwargs_not_two_sum_args():
         definitions=definitions,
     )
 
-    assert len(cases) == 5
+    assert len(cases) == DEFAULT_BENCHMARK_CASE_COUNT
     assert cases[0].benchmark_input.startswith('{"kwargs"')
     assert '"s": "leetcode"' in cases[0].benchmark_input
     assert '"wordDict": ["leet", "code"]' in cases[0].benchmark_input
@@ -86,4 +91,36 @@ def test_sorted_array_to_bst_generated_batch_supplies_nums():
         repeat_count=1,
     )
     assert result.success, result.error
-    assert result.input_description == "5 benchmark case(s)"
+    assert result.input_description == "40 benchmark case(s)"
+
+
+def test_custom_single_case_appends_to_mandatory_generated_cases():
+    definitions = discover_entrypoints(SORTED_ARRAY_TO_BST_CODE)
+    cases = generate_test_cases(
+        code=SORTED_ARRAY_TO_BST_CODE,
+        entrypoint="Solution.sortedArrayToBST",
+        definitions=definitions,
+    )
+
+    benchmark_input = merge_generated_and_custom_benchmark_input(cases, '{"kwargs": {"nums": [9, 10]}}')
+    payload = json.loads(benchmark_input)
+
+    assert len(payload["cases"]) == DEFAULT_BENCHMARK_CASE_COUNT + 1
+    assert payload["cases"][-1]["kwargs"]["nums"] == [9, 10]
+
+
+def test_custom_batch_input_appends_to_mandatory_generated_cases():
+    definitions = discover_entrypoints(SORTED_ARRAY_TO_BST_CODE)
+    cases = generate_test_cases(
+        code=SORTED_ARRAY_TO_BST_CODE,
+        entrypoint="Solution.sortedArrayToBST",
+        definitions=definitions,
+    )
+    custom = '{"cases": [{"kwargs": {"nums": [9]}}, {"kwargs": {"nums": [10]}}]}'
+
+    benchmark_input = merge_generated_and_custom_benchmark_input(cases, custom)
+    payload = json.loads(benchmark_input)
+
+    assert len(payload["cases"]) == DEFAULT_BENCHMARK_CASE_COUNT + 2
+    assert payload["cases"][-2]["kwargs"]["nums"] == [9]
+    assert payload["cases"][-1]["kwargs"]["nums"] == [10]

@@ -1,0 +1,339 @@
+import json
+import sys
+import types
+
+import pytest
+
+from analyzer.models import StaticAnalysisResult
+from llm import ollama_errors
+from llm import ollama_helper
+from optimization.planner import OptimizationPlan
+from scoring.optimizer_score import ScoreBreakdown
+from utils.entrypoints import EntrypointDefinition
+from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT
+
+
+def _fixtures():
+    analysis = StaticAnalysisResult(
+        valid=True,
+        raw_code="def two_sum(nums, target):\n    return []\n",
+        estimated_time="O(n^2)",
+        estimated_space="O(1)",
+        confidence=0.8,
+        metrics={"max_loop_depth": 2},
+    )
+    score = ScoreBreakdown(
+        score=55,
+        efficiency_percentage=55,
+        severity="moderate",
+        improvement_potential="Meaningful",
+        bottlenecks=["Nested loops"],
+    )
+    plan = OptimizationPlan(summary="Use a hash map.")
+    return analysis, score, plan
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+
+class _FakeHTTPError(Exception):
+    def __init__(self, status_code: int, text: str) -> None:
+        super().__init__(text)
+        self.response = _FakeResponse(status_code, text)
+
+
+def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    analysis, score, plan = _fixtures()
+
+    def fail(api_key: str, prompt: str, *, json_mode: bool = False):
+        raise ollama_helper.OllamaHelperError("invalid_key")
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", fail)
+
+    message = ollama_helper.enhance_with_ollama(secret, analysis.raw_code, analysis, score, plan)
+
+    assert message == "Ollama enhancement failed. Ollama rejected the API key. Check that it is active in your Ollama account."
+    assert secret not in message
+
+
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        ("quota", "Ollama quota or rate limit was reached. Try again later."),
+        (
+            "model_unavailable",
+            "Ollama Cloud request failed for the selected model. DeepSeek-V4-Flash may require a subscription; the app will try qwen3-coder-next:cloud as a fallback.",
+        ),
+    ],
+)
+def test_optimized_code_failure_categories_are_sanitized(monkeypatch, category, expected):
+    secret = "SECRET_TEST_KEY"
+    analysis, score, plan = _fixtures()
+
+    def fail(api_key: str, prompt: str, *, json_mode: bool = False):
+        raise ollama_helper.OllamaHelperError(category)
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", fail)
+
+    candidate, error = ollama_helper.generate_optimized_code_with_ollama(
+        secret,
+        analysis.raw_code,
+        analysis,
+        score,
+        plan,
+        entrypoint="two_sum",
+    )
+
+    assert candidate is None
+    assert error == f"Ollama optimization generation failed. {expected}"
+    assert secret not in error
+
+
+def test_malformed_optimized_code_json_returns_safe_error(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    analysis, score, plan = _fixtures()
+
+    def malformed(api_key: str, prompt: str, *, json_mode: bool = False):
+        return "not json"
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", malformed)
+
+    candidate, error = ollama_helper.generate_optimized_code_with_ollama(
+        secret,
+        analysis.raw_code,
+        analysis,
+        score,
+        plan,
+        entrypoint="two_sum",
+    )
+
+    assert candidate is None
+    assert error == "Ollama optimization generation failed. Ollama responded, but not in the expected format. Try again."
+    assert secret not in error
+
+
+def test_successful_structured_optimized_code_generation(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    analysis, score, plan = _fixtures()
+    payload = {
+        "step_by_step_plan": ["Store complements."],
+        "optimized_code": "def two_sum(nums, target):\n    seen = {}\n    return []\n",
+        "explanation": "Uses a hash map.",
+        "validation_tests": ["assert two_sum([2, 7], 9) == [0, 1]"],
+        "expected_time": "O(n)",
+        "expected_space": "O(n)",
+    }
+
+    def success(api_key: str, prompt: str, *, json_mode: bool = False):
+        assert api_key == secret
+        assert json_mode
+        return json.dumps(payload)
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", success)
+
+    candidate, error = ollama_helper.generate_optimized_code_with_ollama(
+        secret,
+        analysis.raw_code,
+        analysis,
+        score,
+        plan,
+        entrypoint="two_sum",
+    )
+
+    assert error is None
+    assert candidate is not None
+    assert candidate.source == "ollama"
+    assert candidate.code.startswith("def two_sum")
+    assert candidate.step_by_step_plan == ["Store complements."]
+    assert candidate.validation_tests == ["assert two_sum([2, 7], 9) == [0, 1]"]
+
+
+def test_ollama_helper_uses_deepseek_flash_first(monkeypatch):
+    fake_ollama = types.ModuleType("ollama")
+
+    class FakeClient:
+        def __init__(self, host: str, headers: dict) -> None:
+            self.host = host
+            self.headers = headers
+
+    fake_ollama.Client = FakeClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+    monkeypatch.setenv("OLLAMA_MODEL", "unavailable-model")
+
+    calls = []
+
+    def fake_generate_content(client, model_name: str, prompt: str, json_mode=False):
+        calls.append(model_name)
+        assert json_mode
+        assert client.host == "https://ollama.com"
+        return '{"ok": true}'
+
+    monkeypatch.setattr(ollama_helper, "_generate_content", fake_generate_content)
+
+    text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
+
+    assert text == '{"ok": true}'
+    assert calls == ["deepseek-v4-flash:cloud"]
+
+
+def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(monkeypatch):
+    fake_ollama = types.ModuleType("ollama")
+
+    class FakeClient:
+        def __init__(self, host: str, headers: dict) -> None:
+            self.host = host
+            self.headers = headers
+
+    fake_ollama.Client = FakeClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+    calls = []
+
+    def fake_generate_content(client, model_name: str, prompt: str, json_mode=False):
+        calls.append(model_name)
+        if model_name == "deepseek-v4-flash:cloud":
+            raise RuntimeError("this model requires a subscription (status code: 403)")
+        return '{"ok": true}'
+
+    monkeypatch.setattr(ollama_helper, "_generate_content", fake_generate_content)
+
+    text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
+
+    assert text == '{"ok": true}'
+    assert calls == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
+
+
+def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
+    monkeypatch.setenv("OLLAMA_MODEL", "custom-model")
+
+    candidates = ollama_helper._model_candidates()
+
+    assert candidates == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
+
+
+def test_visible_ollama_model_options_are_restricted_to_approved_models():
+    expected = {
+        "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
+        "DeepSeek V4 Pro": "deepseek-v4-pro:cloud",
+        "Kimi K2.6": "kimi-k2.6:cloud",
+        "GLM-5.1": "glm-5.1:cloud",
+        "MiniMax M2.7": "minimax-m2.7:cloud",
+        "Gemma 4": "gemma4:cloud",
+        "Nemotron 3 Super": "nemotron-3-super:cloud",
+        "Qwen 3.5": "qwen3.5:cloud",
+        "GPT OSS 120B": "gpt-oss:120b",
+    }
+
+    assert ollama_errors.OLLAMA_MODEL_OPTIONS == expected
+    assert "GLM-5" not in ollama_errors.OLLAMA_MODEL_OPTIONS
+    assert "MiniMax M2.5" not in ollama_errors.OLLAMA_MODEL_OPTIONS
+    for label, model_id in expected.items():
+        assert ollama_errors.normalize_model_name(label) == model_id
+
+
+def test_generate_optimized_code_uses_env_api_key(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    analysis, score, plan = _fixtures()
+    monkeypatch.setenv("OLLAMA_API_KEY", secret)
+
+    def success(api_key: str, prompt: str, *, json_mode: bool = False):
+        assert api_key == secret
+        assert json_mode
+        return json.dumps(
+            {
+                "step_by_step_plan": [],
+                "optimized_code": "def two_sum(nums, target):\n    return []\n",
+                "explanation": "",
+                "validation_tests": [],
+                "expected_time": "O(n)",
+                "expected_space": "O(1)",
+            }
+        )
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", success)
+
+    candidate, error = ollama_helper.generate_optimized_code_with_ollama(
+        "",
+        analysis.raw_code,
+        analysis,
+        score,
+        plan,
+        entrypoint="two_sum",
+    )
+
+    assert error is None
+    assert candidate is not None
+
+
+def test_generate_test_cases_with_ollama_requires_40_valid_cases(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    definition = EntrypointDefinition(name="solve", qualified_name="solve", args=["value"])
+
+    def success(api_key: str, prompt: str, *, json_mode: bool = False):
+        assert api_key == secret
+        assert json_mode
+        return json.dumps(
+            {
+                "test_cases": [
+                    {"name": f"case {index}", "input": {"args": [index]}, "expected_output": index}
+                    for index in range(DEFAULT_BENCHMARK_CASE_COUNT)
+                ]
+            }
+        )
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", success)
+
+    cases, error = ollama_helper.generate_test_cases_with_ollama(
+        secret,
+        "def solve(value):\n    return value\n",
+        definition,
+    )
+
+    assert error == ""
+    assert len(cases) == DEFAULT_BENCHMARK_CASE_COUNT
+    assert cases[0].benchmark_input == '{"args": [0], "kwargs": {}}'
+
+
+def test_generate_test_cases_with_ollama_rejects_short_case_list(monkeypatch):
+    definition = EntrypointDefinition(name="solve", qualified_name="solve", args=["value"])
+
+    def too_short(api_key: str, prompt: str, *, json_mode: bool = False):
+        return json.dumps({"test_cases": [{"name": "one", "input": {"args": [1]}}]})
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", too_short)
+
+    cases, error = ollama_helper.generate_test_cases_with_ollama(
+        "SECRET_TEST_KEY",
+        "def solve(value):\n    return value\n",
+        definition,
+    )
+
+    assert cases == []
+    assert "expected 40" in error
+
+
+@pytest.mark.parametrize(
+    ("status_code", "text", "expected"),
+    [
+        (401, "invalid api key", "invalid_key"),
+        (403, "permission denied for model", "model_unavailable"),
+        (404, "model not found", "model_unavailable"),
+        (429, "too many requests", "quota"),
+        (None, "this model requires a subscription (status code: 403)", "model_unavailable"),
+    ],
+)
+def test_ollama_error_status_classification(status_code, text, expected):
+    assert ollama_errors.classify_ollama_error(_FakeHTTPError(status_code, text)) == expected
+
+
+def test_ollama_error_diagnostic_sanitizes_authorization_header():
+    secret = "SECRET_TEST_KEY"
+    exc = _FakeHTTPError(403, f"Authorization: Bearer {secret}\npermission denied")
+
+    diagnostic = ollama_errors.ollama_error_diagnostic(exc)
+
+    assert secret not in diagnostic.text
+    assert "Authorization: [redacted]" in diagnostic.text

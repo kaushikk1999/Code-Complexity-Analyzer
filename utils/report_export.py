@@ -23,7 +23,7 @@ def build_markdown_report(
     plan: Optional[OptimizationPlan],
     benchmark: Optional[BenchmarkResult],
     scaling: Optional[ScalingBenchmarkResult] = None,
-    gemini_text: Optional[str] = None,
+    ollama_text: Optional[str] = None,
 ) -> str:
     if not analysis:
         return "# Complexity Lab Report\n\nNo analysis has been generated yet.\n"
@@ -79,7 +79,7 @@ def build_markdown_report(
             f"- Current explanation: {plan.interview_feedback.get('current_explanation', '')}"
         )
 
-    gemini_section = gemini_text or "Gemini enhancement was not requested."
+    ollama_section = ollama_text or "Ollama enhancement was not requested."
     patterns = _bullet(
         [
             f"{pattern.name} ({int(pattern.confidence * 100)}%): {pattern.interview_note}"
@@ -148,8 +148,8 @@ def build_markdown_report(
 ## Optimization Plan
 {plan_section}
 
-## Gemini-Enhanced Coaching
-{gemini_section}
+## Ollama-Enhanced Coaching
+{ollama_section}
 
 ## Source Code
 ```python
@@ -181,9 +181,9 @@ def build_html_report(
     plan: Optional[OptimizationPlan],
     benchmark: Optional[BenchmarkResult],
     scaling: Optional[ScalingBenchmarkResult] = None,
-    gemini_text: Optional[str] = None,
+    ollama_text: Optional[str] = None,
 ) -> str:
-    markdown = build_markdown_report(analysis, score, plan, benchmark, scaling, gemini_text)
+    markdown = build_markdown_report(analysis, score, plan, benchmark, scaling, ollama_text)
     if not analysis:
         body = "<p>No analysis has been generated yet.</p>"
     else:

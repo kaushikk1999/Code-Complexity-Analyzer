@@ -119,7 +119,7 @@ def test_same_quality_candidate_is_rejected():
     analysis = analyze_code("def total(values):\n    return sum(values)\n")
     score = calculate_optimization_score(analysis)
     candidate = OptimizedCodeCandidate(
-        source="gemini",
+        source="ollama",
         code="def total(values):\n    return sum(values)\n",
     )
 
@@ -134,7 +134,7 @@ def test_generated_candidate_is_renamed_to_configured_entrypoint():
     analysis = analyze_code(TWO_SUM_BRUTE_FORCE)
     score = calculate_optimization_score(analysis)
     candidate = OptimizedCodeCandidate(
-        source="gemini",
+        source="ollama",
         code="""
 def solution(nums, target):
     seen = {}
@@ -156,7 +156,7 @@ def solution(nums, target):
     )
 
     assert plan.validation.status == "accepted"
-    assert plan.validation.source == "gemini"
+    assert plan.validation.source == "ollama"
     assert "def two_sum(nums, target):" in plan.optimized_code
     assert "def solution" not in plan.optimized_code
 
@@ -165,7 +165,7 @@ def test_unsafe_candidate_is_rejected_before_showing_code():
     analysis = analyze_code("def total(values):\n    return sum(values)\n")
     score = calculate_optimization_score(analysis)
     candidate = OptimizedCodeCandidate(
-        source="gemini",
+        source="ollama",
         code="def total(values):\n    open('x.txt', 'w')\n    return sum(values)\n",
     )
 

@@ -1255,7 +1255,7 @@ def generate_verified_optimization_candidates(
         if generated is None:
             generated = build_local_candidate_for_level(original_code, analysis, entrypoint, level)
             if used_provider and generated is not None:
-                generation_notes.append("Gemini candidate generation failed. Falling back to local verified optimizer.")
+                generation_notes.append("Ollama candidate generation failed. Falling back to local verified optimizer.")
 
         verified = _verify_candidate_for_level(
             original_code=original_code,

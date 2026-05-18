@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 from datetime import datetime
 from typing import List, Optional
 
@@ -22,10 +23,12 @@ from benchmarking import (
 from interview import InterviewGrade, build_follow_up_questions, grade_interview_answer
 from llm import (
     AlgorithmPlannerResult,
-    enhance_with_gemini,
+    enhance_with_ollama,
     generate_algorithm_optimization_plan,
-    generate_optimized_code_with_gemini,
+    generate_optimized_code_with_ollama,
+    generate_test_cases_with_ollama,
 )
+from llm.ollama_errors import DEFAULT_OLLAMA_MODEL, OLLAMA_MODEL_OPTIONS, normalize_model_name
 from optimization import (
     OptimizationPlan,
     OptimizationStep,
@@ -43,11 +46,16 @@ from utils.constants import (
     HISTORY_LIMIT,
     MAX_CODE_CHARS,
 )
-from utils.entrypoints import choose_entrypoint, discover_entrypoints
+from utils.entrypoints import choose_entrypoint, discover_entrypoints, find_entrypoint_definition
 from utils.examples import EXAMPLES, get_example
 from utils.history_store import load_recent_records, progress_summary, save_analysis_record
 from utils.report_export import build_html_report, build_linkedin_summary, build_markdown_report
-from utils.test_case_generator import build_benchmark_batch_input, generate_test_cases
+from utils.test_case_generator import (
+    DEFAULT_BENCHMARK_CASE_COUNT,
+    benchmark_payload_case_count,
+    generate_test_cases,
+    merge_generated_and_custom_benchmark_input,
+)
 from visualization.charts import (
     history_chart,
     memory_chart,
@@ -66,6 +74,17 @@ from visualization.ui_helpers import (
 )
 
 LEGACY_DEFAULT_BENCHMARK_INPUT = '{"args": [[2, 7, 11, 15, 21, 30, 42, 55], 57]}'
+LLM_MODEL_HELP = {
+    "DeepSeek V4 Flash": "Efficient preview of the DeepSeek-V4 MoE series with a 1M-token context window.",
+    "DeepSeek V4 Pro": "Frontier DeepSeek-V4 MoE model with a 1M-token context window and reasoning modes.",
+    "Kimi K2.6": "Long-horizon coding, coding-driven design, autonomous execution, and orchestration.",
+    "GLM-5.1": "Flagship agentic engineering model with stronger coding capabilities.",
+    "MiniMax M2.7": "Coding, agentic workflows, and professional productivity.",
+    "Gemma 4": "Reasoning, agentic workflows, coding, and multimodal understanding.",
+    "Nemotron 3 Super": "Efficient open MoE model for complex multi-agent applications.",
+    "Qwen 3.5": "Open multimodal model family with strong utility and performance.",
+    "GPT OSS 120B": "Large open-weight GPT OSS model.",
+}
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -95,18 +114,15 @@ def _initialize_state() -> None:
         "scaling": None,
         "score": None,
         "plan": None,
-        "gemini_text": None,
+        "ollama_text": None,
         "answer_grade": None,
         "algorithm_planner_question": "",
         "algorithm_planner_result": None,
         "algorithm_planner_submit_pending": False,
         "code_analyzer_plan_submit_pending": False,
         "benchmark_input_widget_version": 0,
-        "gemini_api_key": "",
-        "gemini_api_key_widget_version": 0,
-        "pending_gemini_api_key": "",
-        "gemini_prompt_decision": "",
-        "gemini_key_requested": False,
+        "ollama_api_key": "",
+        "selected_llm_model": "DeepSeek V4 Flash",
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
@@ -115,6 +131,8 @@ def _initialize_state() -> None:
         "interview_answer": "",
         "benchmark_input_entrypoint": "",
         "generated_test_cases": [],
+        "generated_test_case_source": "local",
+        "generated_test_case_note": "",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -128,77 +146,46 @@ def _clear_outputs() -> None:
     st.session_state.scaling = None
     st.session_state.score = None
     st.session_state.plan = None
-    st.session_state.gemini_text = None
+    st.session_state.ollama_text = None
     st.session_state.answer_grade = None
     st.session_state.generated_test_cases = []
+    st.session_state.generated_test_case_source = "local"
+    st.session_state.generated_test_case_note = ""
 
 
-def _gemini_key_widget_key() -> str:
-    version = int(st.session_state.get("gemini_api_key_widget_version", 0) or 0)
-    return f"gemini_api_key_input_{version}"
-
-
-def _queue_gemini_submit(flag_key: str) -> None:
-    widget_key = _gemini_key_widget_key()
-    st.session_state.pending_gemini_api_key = str(
-        st.session_state.get(widget_key, "") or st.session_state.get("gemini_api_key", "") or ""
-    )
-    st.session_state.gemini_api_key = ""
-    if widget_key in st.session_state:
-        del st.session_state[widget_key]
-    st.session_state.gemini_api_key_widget_version = int(
-        st.session_state.get("gemini_api_key_widget_version", 0) or 0
-    ) + 1
+def _queue_ollama_submit(flag_key: str) -> None:
     st.session_state[flag_key] = True
 
 
-@st.dialog("Unlock stronger optimization with Gemini")
-def _gemini_key_dialog(source: str) -> None:
-    st.write(
-        "Gemini can search a wider optimization space and propose stronger candidate rewrites. "
-        "Your code will still be locally validated and benchmarked before any generated code is accepted."
-    )
-    key = st.text_input(
-        "Gemini API key",
-        type="password",
-        key=f"gemini_key_dialog_input_{source}",
-    )
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Use Gemini", key=f"use_gemini_{source}"):
-            st.session_state.pending_gemini_api_key = key.strip()
-            st.session_state.gemini_api_key = ""
-            st.session_state.gemini_prompt_decision = "accepted"
-            st.session_state.gemini_key_requested = False
-            st.rerun()
-    with col2:
-        if st.button("Continue without Gemini", key=f"skip_gemini_{source}"):
-            st.session_state.pending_gemini_api_key = ""
-            st.session_state.gemini_prompt_decision = "declined"
-            st.session_state.gemini_key_requested = False
-            st.rerun()
-
-
-def _resolve_gemini_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
-    api_key = str(st.session_state.get("pending_gemini_api_key", "") or fallback_key or "").strip()
+def _resolve_ollama_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
+    api_key = str(fallback_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
     if api_key:
-        st.session_state.pending_gemini_api_key = ""
-        st.session_state.gemini_prompt_decision = ""
-        st.session_state.gemini_key_requested = False
         return api_key
 
     st.warning(
-        "For broader optimization search, add a Gemini API key. Gemini can explore more algorithmic rewrites "
-        "and edge-case-safe variants. If you continue without it, Complexity Lab will use its local deterministic "
-        "optimizer and only display code that passes validation."
+        "Ollama API key is not configured. Add OLLAMA_API_KEY to the local .env file to enable LLM-powered "
+        "optimization and test-case generation. Complexity Lab will use local deterministic fallbacks for this run."
     )
     return ""
+
+
+def _selected_ollama_model() -> str:
+    return normalize_model_name(str(st.session_state.get("selected_llm_model", "") or "")) or DEFAULT_OLLAMA_MODEL
 
 
 def _validation_benchmark_input() -> str:
     if st.session_state.get("static_only_mode", False):
         return ""
-    return str(st.session_state.get("benchmark_input", "") or "")
+    return merge_generated_and_custom_benchmark_input(
+        st.session_state.get("generated_test_cases", []),
+        str(st.session_state.get("benchmark_input", "") or ""),
+    )
+
+
+def _has_mandatory_benchmark_baseline(benchmark: Optional[BenchmarkResult]) -> bool:
+    if not benchmark or not benchmark.success:
+        return False
+    return len({run.case_index for run in benchmark.runs}) >= DEFAULT_BENCHMARK_CASE_COUNT
 
 
 def _benchmark_input_widget_key() -> str:
@@ -223,17 +210,41 @@ def _refresh_benchmark_input_for_entrypoint(force: bool = False) -> None:
 
 
 def _autofill_benchmark_input_from_generated_cases(force: bool = False) -> None:
-    cases = st.session_state.get("generated_test_cases", [])
-    generated_input = build_benchmark_batch_input(cases)
-    if not generated_input:
-        return
-
     current_input = str(st.session_state.get("benchmark_input", "") or "").strip()
     current_entrypoint = str(st.session_state.get("entrypoint", "") or "")
     last_entrypoint = str(st.session_state.get("benchmark_input_entrypoint", "") or "")
-    should_fill = force or not current_input or (current_entrypoint and current_entrypoint != last_entrypoint)
+    should_fill = force or (current_entrypoint and current_entrypoint != last_entrypoint)
     if should_fill:
-        _set_benchmark_input(generated_input, current_entrypoint)
+        _set_benchmark_input("" if not current_input or force else current_input, current_entrypoint)
+
+
+def _resolve_generated_test_cases(code: str, definitions, api_key: str = "") -> None:
+    definition = find_entrypoint_definition(definitions, st.session_state.entrypoint)
+    llm_key = str(api_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
+    if definition and llm_key:
+        llm_cases, llm_error = generate_test_cases_with_ollama(
+            api_key=llm_key,
+            code=code,
+            definition=definition,
+            model_name=_selected_ollama_model(),
+            target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+        )
+        if len(llm_cases) == DEFAULT_BENCHMARK_CASE_COUNT:
+            st.session_state.generated_test_cases = llm_cases
+            st.session_state.generated_test_case_source = "llm"
+            st.session_state.generated_test_case_note = ""
+            return
+        st.session_state.generated_test_case_note = llm_error or "LLM did not return the required 40 cases."
+    else:
+        st.session_state.generated_test_case_note = "Using local fallback cases because no Ollama API key is configured."
+
+    st.session_state.generated_test_cases = generate_test_cases(
+        code=code,
+        entrypoint=st.session_state.entrypoint,
+        definitions=definitions,
+        target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+    )
+    st.session_state.generated_test_case_source = "local"
 
 
 def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
@@ -262,11 +273,7 @@ def _analyze_current(
     analysis = analyze_code(code)
     score = calculate_optimization_score(analysis, benchmark)
     definitions = discover_entrypoints(code)
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-    )
+    _resolve_generated_test_cases(code, definitions, api_key=api_key)
     _refresh_benchmark_input_for_entrypoint()
     if autofill_benchmark_input:
         _autofill_benchmark_input_from_generated_cases()
@@ -293,18 +300,15 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
     code = st.session_state.editor_code
     _sync_entrypoint_with_code(update_state=True)
     definitions = discover_entrypoints(code)
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-    )
+    _resolve_generated_test_cases(code, definitions)
     _refresh_benchmark_input_for_entrypoint()
     _autofill_benchmark_input_from_generated_cases()
+    benchmark_input = _validation_benchmark_input()
     if st.session_state.docker_backend:
         benchmark = run_benchmark_in_docker(
             code=code,
             entrypoint=st.session_state.entrypoint,
-            input_text=st.session_state.benchmark_input,
+            input_text=benchmark_input,
             repeat_count=st.session_state.repeat_count or settings["repeat_count"],
             warmup_count=settings["warmup_count"],
             timeout_seconds=st.session_state.timeout_seconds or settings["timeout_seconds"],
@@ -313,7 +317,7 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
         benchmark = run_benchmark(
             code=code,
             entrypoint=st.session_state.entrypoint,
-            input_text=st.session_state.benchmark_input,
+            input_text=benchmark_input,
             repeat_count=st.session_state.repeat_count or settings["repeat_count"],
             warmup_count=settings["warmup_count"],
             timeout_seconds=st.session_state.timeout_seconds or settings["timeout_seconds"],
@@ -342,11 +346,7 @@ def _run_scaling() -> None:
     settings = profile_settings(st.session_state.benchmark_profile)
     _sync_entrypoint_with_code(update_state=True)
     definitions = discover_entrypoints(st.session_state.editor_code)
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=st.session_state.editor_code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-    )
+    _resolve_generated_test_cases(st.session_state.editor_code, definitions)
     _refresh_benchmark_input_for_entrypoint()
     _autofill_benchmark_input_from_generated_cases()
     sizes = st.session_state.scaling_sizes
@@ -357,7 +357,7 @@ def _run_scaling() -> None:
     scaling = run_scaling_benchmark(
         code=st.session_state.editor_code,
         entrypoint=st.session_state.entrypoint,
-        input_text=st.session_state.benchmark_input,
+        input_text=_validation_benchmark_input(),
         data_shape=st.session_state.scaling_shape,
         sizes=parsed_sizes or settings["sizes"],
         repeat_count=max(1, min(st.session_state.repeat_count, 10)),
@@ -368,21 +368,22 @@ def _run_scaling() -> None:
     _analyze_current(st.session_state.benchmark)
 
 
-def _generate_gemini_feedback(api_key: str) -> None:
+def _generate_ollama_feedback(api_key: str) -> None:
     if not st.session_state.analysis or not st.session_state.score or not st.session_state.plan:
         _analyze_current(st.session_state.benchmark)
     if st.session_state.analysis and st.session_state.score and st.session_state.plan:
-        st.session_state.gemini_text = enhance_with_gemini(
+        st.session_state.ollama_text = enhance_with_ollama(
             api_key=api_key,
             code=st.session_state.editor_code,
             analysis=st.session_state.analysis,
             score=st.session_state.score,
             plan=st.session_state.plan,
+            model_name=_selected_ollama_model(),
         )
 
 
 def _build_verified_optimization_plan(api_key: str) -> None:
-    st.session_state.gemini_text = None
+    st.session_state.ollama_text = None
     if st.session_state.static_only_mode:
         st.session_state.benchmark = None
         st.info("Static-only mode is enabled, so Generate Optimization Plan skipped automatic benchmarking.")
@@ -399,7 +400,7 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     candidate_provider = None
     if api_key:
         def candidate_provider(level: str, rejection_reasons: List[str]):
-            return generate_optimized_code_with_gemini(
+            return generate_optimized_code_with_ollama(
                 api_key=api_key,
                 code=st.session_state.editor_code,
                 analysis=analysis,
@@ -409,6 +410,7 @@ def _build_verified_optimization_plan(api_key: str) -> None:
                 level=level,
                 retry_count=0,
                 rejection_reasons=rejection_reasons,
+                model_name=_selected_ollama_model(),
             )
 
     plan = generate_verified_optimization_candidates(
@@ -426,12 +428,12 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     st.session_state.plan = plan
 
     if plan.generation_notes:
-        st.warning("Gemini candidate generation failed. Falling back to local verified optimizer.")
-        st.session_state.gemini_text = "\n".join(f"- {note}" for note in plan.generation_notes)
+        st.warning("Ollama candidate generation failed. Falling back to local verified optimizer.")
+        st.session_state.ollama_text = "\n".join(f"- {note}" for note in plan.generation_notes)
     elif api_key:
-        gemini_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "gemini"]
-        if gemini_candidates:
-            st.session_state.gemini_text = "Gemini generated level-specific candidates that were locally analyzed and benchmarked."
+        ollama_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "ollama"]
+        if ollama_candidates:
+            st.session_state.ollama_text = "Ollama generated level-specific candidates that were locally analyzed and benchmarked."
 
 
 def _save_current_record() -> None:
@@ -447,7 +449,7 @@ def _save_current_record() -> None:
         plan,
         st.session_state.benchmark,
         st.session_state.scaling,
-        st.session_state.gemini_text,
+        st.session_state.ollama_text,
     )
     record_id = save_analysis_record(
         session_name=st.session_state.practice_session,
@@ -505,11 +507,19 @@ def _render_summary_metrics(
         caption = f"{score.efficiency_percentage}% efficiency" if score else "Not scored"
         st.markdown(metric_card("Optimization Score", value, caption), unsafe_allow_html=True)
     with cols[3]:
-        peak_ms = f"{benchmark.summary.max_ms:.3f} ms" if benchmark and benchmark.success else "Not run"
-        st.markdown(metric_card("Peak Runtime", peak_ms, "Measured with perf_counter_ns"), unsafe_allow_html=True)
+        benchmark_ready = _has_mandatory_benchmark_baseline(benchmark)
+        peak_ms = f"{benchmark.summary.max_ms:.3f} ms" if benchmark_ready and benchmark else "Not run"
+        st.markdown(
+            metric_card("Peak Runtime", peak_ms, f"Requires {DEFAULT_BENCHMARK_CASE_COUNT} generated cases"),
+            unsafe_allow_html=True,
+        )
     with cols[4]:
-        peak = f"{benchmark.summary.max_peak_memory_kb:.1f} KB" if benchmark and benchmark.success else "Not run"
-        st.markdown(metric_card("Peak Memory", peak, "Measured with tracemalloc"), unsafe_allow_html=True)
+        benchmark_ready = _has_mandatory_benchmark_baseline(benchmark)
+        peak = f"{benchmark.summary.max_peak_memory_kb:.1f} KB" if benchmark_ready and benchmark else "Not run"
+        st.markdown(
+            metric_card("Peak Memory", peak, f"Requires {DEFAULT_BENCHMARK_CASE_COUNT} generated cases"),
+            unsafe_allow_html=True,
+        )
 
 
 def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
@@ -590,10 +600,17 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
     generated_cases = st.session_state.get("generated_test_cases", [])
     if generated_cases:
         st.subheader("Generated Test Cases")
-        st.caption("These are locally generated from the detected entrypoint and code shape.")
+        source = str(st.session_state.get("generated_test_case_source", "local") or "local").upper()
+        note = str(st.session_state.get("generated_test_case_note", "") or "")
+        st.caption(
+            f"{len(generated_cases)} mandatory benchmark cases generated by {source}. "
+            "Custom benchmark input is appended to these cases."
+        )
+        if note and source == "LOCAL":
+            st.info(note)
 
         for index, case in enumerate(generated_cases, start=1):
-            with st.expander(f"Test case {index}: {case.name}", expanded=index == 1):
+            with st.expander(f"Test case {index}: {case.name}", expanded=index <= 3):
                 st.code(case.benchmark_input, language="json")
                 if case.expected_output:
                     st.write(f"Expected output: `{case.expected_output}`")
@@ -601,11 +618,11 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
                     st.caption(case.reason)
 
                 if st.button(
-                    f"Use as benchmark input #{index}",
+                    f"Append as custom input #{index}",
                     key=f"use_generated_case_{index}",
                 ):
                     _set_benchmark_input(case.benchmark_input, st.session_state.entrypoint)
-                    st.success("Benchmark input updated from generated test case.")
+                    st.success("Custom benchmark input updated. It will be appended after the 40 generated cases.")
                     _rerun()
 
     if analysis.anti_patterns:
@@ -646,13 +663,22 @@ def _render_benchmark_tab(
     elif not benchmark.success:
         st.error(benchmark.error or "Benchmark failed.")
         st.info("Static analysis is still available even when execution is blocked or fails.")
+    elif not _has_mandatory_benchmark_baseline(benchmark):
+        st.warning(f"Peak runtime and memory require at least {DEFAULT_BENCHMARK_CASE_COUNT} generated cases.")
     else:
         cols = st.columns(4)
         cols[0].metric("Min runtime", f"{benchmark.summary.min_ms:.4f} ms")
         cols[1].metric("Peak Runtime", f"{benchmark.summary.max_ms:.4f} ms")
         cols[2].metric("Std dev", f"{benchmark.summary.std_ms:.4f} ms")
         cols[3].metric("Peak memory", f"{benchmark.summary.max_peak_memory_kb:.2f} KB")
-        st.caption(f"Benchmark input: {benchmark.input_description}. Total measured executions: {benchmark.summary.repeat_count}.")
+        default_cases = min(DEFAULT_BENCHMARK_CASE_COUNT, len({run.case_index for run in benchmark.runs}))
+        total_cases = len({run.case_index for run in benchmark.runs})
+        custom_cases = max(0, total_cases - default_cases)
+        st.caption(
+            f"Benchmark input: {benchmark.input_description}. "
+            f"Default generated cases: {default_cases}. Custom appended cases: {custom_cases}. "
+            f"Total measured executions: {benchmark.summary.repeat_count}."
+        )
         chart_cols = st.columns(2)
         with chart_cols[0]:
             st.plotly_chart(runtime_chart(benchmark))
@@ -914,7 +940,7 @@ def _render_optimization_tab(
 def _render_interview_tab(
     analysis: Optional[StaticAnalysisResult],
     plan: Optional[OptimizationPlan],
-    gemini_text: Optional[str],
+    ollama_text: Optional[str],
     answer_grade: Optional[InterviewGrade],
 ) -> None:
     if not analysis or not plan:
@@ -964,7 +990,7 @@ def _render_interview_tab(
         "Write your interview answer and grade it locally",
         key="interview_answer",
         height=160,
-        help="This local rubric does not call Gemini. It checks correctness language, complexity, edge cases, trade-offs, and communication length.",
+        help="This local rubric does not call Ollama. It checks correctness language, complexity, edge cases, trade-offs, and communication length.",
     )
     if st.button("Grade My Answer", width="stretch"):
         st.session_state.answer_grade = grade_interview_answer(st.session_state.interview_answer, analysis, plan)
@@ -985,9 +1011,9 @@ def _render_interview_tab(
         with st.expander("Model answer"):
             st.write(answer_grade.model_answer)
 
-    if gemini_text:
-        st.markdown("#### Gemini-enhanced coaching")
-        st.markdown(gemini_text)
+    if ollama_text:
+        st.markdown("#### Ollama-enhanced coaching")
+        st.markdown(ollama_text)
 
 
 def _render_report_tab(
@@ -996,10 +1022,10 @@ def _render_report_tab(
     plan: Optional[OptimizationPlan],
     benchmark: Optional[BenchmarkResult],
     scaling: Optional[ScalingBenchmarkResult],
-    gemini_text: Optional[str],
+    ollama_text: Optional[str],
 ) -> None:
-    report = build_markdown_report(analysis, score, plan, benchmark, scaling, gemini_text)
-    html_report = build_html_report(analysis, score, plan, benchmark, scaling, gemini_text)
+    report = build_markdown_report(analysis, score, plan, benchmark, scaling, ollama_text)
+    html_report = build_html_report(analysis, score, plan, benchmark, scaling, ollama_text)
     download_cols = st.columns(2)
     with download_cols[0]:
         st.download_button(
@@ -1052,7 +1078,7 @@ def _render_algorithm_planner_result(result: AlgorithmPlannerResult) -> None:
     else:
         st.info("Not generated in local mode or blocked by safety validation.")
 
-    complexity_cols = st.columns(3)
+    complexity_cols = st.columns(4)
     with complexity_cols[0]:
         st.markdown(
             metric_card("Time Complexity", result.time_complexity or "Not available", "Big-O analysis"),
@@ -1068,9 +1094,14 @@ def _render_algorithm_planner_result(result: AlgorithmPlannerResult) -> None:
             metric_card("Peak Runtime", result.runtime.display_value, "Measured only when safe test cases run"),
             unsafe_allow_html=True,
         )
+    with complexity_cols[3]:
+        st.markdown(
+            metric_card("Peak Memory", result.runtime.memory_display_value, "Measured across 40 generated cases"),
+            unsafe_allow_html=True,
+        )
     st.caption(result.complexity_note)
     if result.runtime.details:
-        with st.expander("Peak runtime measurement details"):
+        with st.expander("Peak runtime and memory measurement details"):
             for detail in result.runtime.details:
                 st.write(f"- {detail}")
 
@@ -1105,15 +1136,14 @@ def _render_algorithm_planner_tab() -> None:
         type="primary",
         key="algorithm_planner_generate_plan",
         width="stretch",
-        on_click=_queue_gemini_submit,
+        on_click=_queue_ollama_submit,
         args=("algorithm_planner_submit_pending",),
     )
 
     pending_submit = bool(st.session_state.get("algorithm_planner_submit_pending", False))
     if submitted or pending_submit:
-        current_api_key = _resolve_gemini_key_for_action(
+        current_api_key = _resolve_ollama_key_for_action(
             "algorithm_planner",
-            str(st.session_state.get("gemini_api_key", "") or ""),
         )
         if current_api_key is None:
             return
@@ -1123,18 +1153,17 @@ def _render_algorithm_planner_tab() -> None:
             st.session_state.algorithm_planner_result = generate_algorithm_optimization_plan(
                 current_question,
                 current_api_key,
+                model_name=_selected_ollama_model(),
             )
 
     result = st.session_state.algorithm_planner_result
     if result:
-        if result.source == "local":
-            st.info("No Gemini API key was provided, so this is a local estimated planning outline.")
         _render_algorithm_planner_result(result)
     else:
         render_empty_state("Enter a coding question and generate an optimization plan.")
 
 
-def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
+def _render_code_analyzer_workflow() -> None:
     st.markdown("#### Python Code")
     st.text_area(
         "Paste Python code",
@@ -1155,7 +1184,7 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
             "Generate Optimization Plan",
             key="code_analyzer_generate_plan",
             width="stretch",
-            on_click=_queue_gemini_submit,
+            on_click=_queue_ollama_submit,
             args=("code_analyzer_plan_submit_pending",),
         )
     with action_cols[4]:
@@ -1164,20 +1193,20 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
     if analyze_clicked:
         with st.spinner("Analyzing AST features and estimating complexity..."):
             st.session_state.benchmark = None
-            st.session_state.gemini_text = None
+            st.session_state.ollama_text = None
             _analyze_current(None, autofill_benchmark_input=True)
             _rerun()
     if benchmark_clicked:
         with st.spinner("Running guarded benchmarks with timing and memory tracing..."):
-            st.session_state.gemini_text = None
+            st.session_state.ollama_text = None
             _run_benchmark()
     if scaling_clicked:
         with st.spinner("Running generated input-size scaling experiments..."):
-            st.session_state.gemini_text = None
+            st.session_state.ollama_text = None
             _run_scaling()
     pending_plan_click = bool(st.session_state.get("code_analyzer_plan_submit_pending", False))
     if plan_clicked or pending_plan_click:
-        current_api_key = _resolve_gemini_key_for_action("code_analyzer", gemini_api_key)
+        current_api_key = _resolve_ollama_key_for_action("code_analyzer")
         if current_api_key is None:
             return
         st.session_state.code_analyzer_plan_submit_pending = False
@@ -1191,7 +1220,7 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
     scaling_state = st.session_state.scaling
     score_state = st.session_state.score
     plan_state = st.session_state.plan
-    gemini_state = st.session_state.gemini_text
+    ollama_state = st.session_state.ollama_text
     answer_grade_state = st.session_state.answer_grade
 
     _render_summary_metrics(analysis_state, score_state, benchmark_state)
@@ -1204,9 +1233,9 @@ def _render_code_analyzer_workflow(gemini_api_key: str) -> None:
     with tabs[2]:
         _render_optimization_tab(analysis_state, score_state, plan_state)
     with tabs[3]:
-        _render_interview_tab(analysis_state, plan_state, gemini_state, answer_grade_state)
+        _render_interview_tab(analysis_state, plan_state, ollama_state, answer_grade_state)
     with tabs[4]:
-        _render_report_tab(analysis_state, score_state, plan_state, benchmark_state, scaling_state, gemini_state)
+        _render_report_tab(analysis_state, score_state, plan_state, benchmark_state, scaling_state, ollama_state)
     with tabs[5]:
         _render_progress_tab()
 
@@ -1259,6 +1288,21 @@ def main() -> None:
                 _rerun()
 
         st.divider()
+        st.markdown("#### LLM model")
+        if st.session_state.get("selected_llm_model") not in OLLAMA_MODEL_OPTIONS:
+            st.session_state.selected_llm_model = "DeepSeek V4 Flash"
+        st.selectbox(
+            "Use model for optimized code",
+            list(OLLAMA_MODEL_OPTIONS.keys()),
+            key="selected_llm_model",
+            help="Used for Ollama-powered algorithm planning and optimized-code generation.",
+        )
+        selected_model_label = str(st.session_state.get("selected_llm_model", "") or "")
+        selected_model_id = _selected_ollama_model()
+        st.caption(LLM_MODEL_HELP.get(selected_model_label, "Selected Ollama model."))
+        st.caption(f"Model id: `{selected_model_id}`")
+
+        st.divider()
         st.checkbox(
             "Static-only public mode",
             key="static_only_mode",
@@ -1296,24 +1340,33 @@ def main() -> None:
                 help="No functions were detected. Leave blank to benchmark top-level script execution.",
             )
         definitions = discover_entrypoints(str(st.session_state.get("editor_code", "") or ""))
-        st.session_state.generated_test_cases = generate_test_cases(
-            code=str(st.session_state.get("editor_code", "") or ""),
-            entrypoint=st.session_state.entrypoint,
-            definitions=definitions,
-        )
+        if not st.session_state.get("generated_test_cases"):
+            st.session_state.generated_test_cases = generate_test_cases(
+                code=str(st.session_state.get("editor_code", "") or ""),
+                entrypoint=st.session_state.entrypoint,
+                definitions=definitions,
+                target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+            )
+            st.session_state.generated_test_case_source = "local"
         _refresh_benchmark_input_for_entrypoint()
         benchmark_input_value = st.text_area(
-            "Benchmark input",
+            "Custom benchmark input",
             value=str(st.session_state.get("benchmark_input", "") or ""),
             key=_benchmark_input_widget_key(),
             height=140,
             help=(
-                'Leave blank until you are ready to run. Use {"args": [...], "kwargs": {...}}, '
+                f"Optional. The default benchmark always runs {DEFAULT_BENCHMARK_CASE_COUNT} generated cases first; "
+                'custom input is appended. Use {"args": [...], "kwargs": {...}}, '
                 'simple assignments like arr = [1, 2, 3], {"stdin": "line1\\nline2\\n"} for input() code, '
                 'or multiple cases like [{"kwargs": {...}}, {"stdin": "..."}].'
             ),
         )
         st.session_state.benchmark_input = benchmark_input_value
+        custom_count = benchmark_payload_case_count(benchmark_input_value)
+        st.caption(
+            f"Default benchmark uses {DEFAULT_BENCHMARK_CASE_COUNT} generated cases; "
+            f"custom appended cases: {custom_count}."
+        )
         st.slider("Benchmark repeats", min_value=1, max_value=30, value=DEFAULT_REPEAT_COUNT, key="repeat_count")
         st.slider(
             "Timeout seconds",
@@ -1326,16 +1379,6 @@ def main() -> None:
         st.selectbox("Scaling input shape", ["list", "string", "matrix", "dict", "graph"], key="scaling_shape")
         st.text_input("Scaling sizes", value="10,100,500", key="scaling_sizes")
         st.select_slider("Input-size mindset", options=["Tiny", "Small", "Medium", "Large", "Stress"], value="Small")
-        gemini_api_key = st.text_input(
-            "Gemini API key (optional)",
-            key=_gemini_key_widget_key(),
-            type="password",
-            help=(
-                "Used only for the current Streamlit request to enhance feedback and the Algorithm Planner. "
-                "It is not saved to history or reports."
-            ),
-        )
-        st.session_state.gemini_api_key = gemini_api_key
         st.caption("Execution protections are best-effort and intended for interview-prep snippets.")
 
     _render_hero()
@@ -1344,7 +1387,7 @@ def main() -> None:
     with workflow_tabs[0]:
         _render_algorithm_planner_tab()
     with workflow_tabs[1]:
-        _render_code_analyzer_workflow(gemini_api_key)
+        _render_code_analyzer_workflow()
 
 
 if __name__ == "__main__":

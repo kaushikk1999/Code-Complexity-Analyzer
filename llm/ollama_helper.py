@@ -1,4 +1,4 @@
-"""Optional Gemini enhancement for natural-language feedback."""
+"""Optional Ollama Cloud enhancement for natural-language feedback."""
 
 from __future__ import annotations
 
@@ -8,129 +8,99 @@ import re
 from typing import Any, Optional
 
 from analyzer.models import StaticAnalysisResult
+from llm.ollama_errors import (
+    OLLAMA_HOST,
+    classify_ollama_error,
+    model_candidates,
+    ollama_error_message,
+)
 from optimization.planner import OptimizationPlan, OptimizedCodeCandidate
 from scoring.optimizer_score import ScoreBreakdown
-
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
-GEMINI_MODEL_FALLBACKS = (
-    DEFAULT_GEMINI_MODEL,
-    "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-)
+from utils.entrypoints import EntrypointDefinition
+from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT, GeneratedTestCase
 
 
-class GeminiHelperError(Exception):
-    """Gemini failure category safe to render in the UI."""
+class OllamaHelperError(Exception):
+    """Ollama failure category safe to render in the UI."""
 
     def __init__(self, category: str = "request_failed") -> None:
         super().__init__(category)
         self.category = category
 
 
-def _model_candidates() -> list[str]:
-    candidates = [os.getenv("GEMINI_MODEL", "").strip(), *GEMINI_MODEL_FALLBACKS]
-    unique_candidates: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if candidate and candidate not in seen:
-            unique_candidates.append(candidate)
-            seen.add(candidate)
-    return unique_candidates
+def _model_candidates(preferred_model: str = "") -> list[str]:
+    return model_candidates(preferred_model)
 
 
-def _classify_gemini_error(exc: Exception) -> str:
-    error_text = f"{type(exc).__name__} {exc}".lower()
-    if any(marker in error_text for marker in ("quota", "rate limit", "rate_limit", "429", "resource_exhausted")):
-        return "quota"
-    if ("model" in error_text or "models/" in error_text) and any(
-        marker in error_text
-        for marker in (
-            "not found",
-            "unavailable",
-            "unsupported",
-            "not supported",
-            "permission denied",
-            "not enabled",
-            "404",
-        )
-    ):
-        return "model_unavailable"
-    if any(
-        marker in error_text
-        for marker in (
-            "api key",
-            "apikey",
-            "bad key",
-            "invalid key",
-            "unauthenticated",
-            "authentication",
-            "permission denied",
-            "401",
-            "403",
-        )
-    ):
-        return "invalid_key"
-    return "request_failed"
+def _classify_ollama_error(exc: Exception) -> str:
+    return classify_ollama_error(exc)
 
 
-def _gemini_error_message(category: str) -> str:
-    messages = {
-        "invalid_key": "Gemini rejected the API key. Check that it is active in Google AI Studio.",
-        "quota": "Gemini free-tier quota or rate limit was reached. Try again later.",
-        "model_unavailable": "The selected Gemini model is unavailable for this key. The app tried fallback models.",
-        "malformed_response": "Gemini responded, but not in the expected format. Try again.",
-        "missing_package": "The Google Gen AI SDK is not installed. Install google-genai and try again.",
+def _ollama_error_message(category: str) -> str:
+    return ollama_error_message(category)
+
+
+def _extract_message_text(response: Any) -> str:
+    message = getattr(response, "message", None)
+    if message is not None:
+        content = getattr(message, "content", None)
+        if content:
+            return str(content).strip()
+    if isinstance(response, dict):
+        message_dict = response.get("message")
+        if isinstance(message_dict, dict):
+            return str(message_dict.get("content", "") or "").strip()
+    return ""
+
+
+def _generate_content(client: Any, model_name: str, prompt: str, json_mode: bool = False) -> str:
+    request: dict[str, Any] = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
     }
-    return messages.get(category, "Gemini request failed. Check the API key and try again.")
+    if json_mode:
+        request["format"] = "json"
+    return _extract_message_text(client.chat(**request))
 
 
-def _generate_content(client: Any, model_name: str, prompt: str, config: Any = None) -> Any:
-    request: dict[str, Any] = {"model": model_name, "contents": prompt}
-    if config is not None:
-        request["config"] = config
-    return client.models.generate_content(**request)
-
-
-def _request_gemini_text(api_key: str, prompt: str, *, json_mode: bool = False) -> str:
+def _request_ollama_text(api_key: str, prompt: str, *, json_mode: bool = False, model_name: str = "") -> str:
     # The API key is used only to construct this request-scoped client.
+    api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
+    if not api_key:
+        raise OllamaHelperError("invalid_key")
     try:
-        from google import genai
-        from google.genai import types
+        from ollama import Client
     except ImportError as exc:
-        raise GeminiHelperError("missing_package") from exc
+        raise OllamaHelperError("missing_package") from exc
 
-    client = genai.Client(api_key=api_key)
-    config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
+    client = Client(host=OLLAMA_HOST, headers={"Authorization": f"Bearer {api_key}"})
     last_model_error: Exception | None = None
 
-    for model_name in _model_candidates():
+    for candidate_model in _model_candidates(model_name):
         try:
-            response = _generate_content(client, model_name, prompt, config)
+            return _generate_content(client, candidate_model, prompt, json_mode)
         except Exception as exc:
-            category = _classify_gemini_error(exc)
+            category = _classify_ollama_error(exc)
             if category == "model_unavailable":
                 last_model_error = exc
                 continue
-            raise GeminiHelperError(category) from exc
-        text = getattr(response, "text", None)
-        return text.strip() if text else ""
+            raise OllamaHelperError(category) from exc
 
-    raise GeminiHelperError("model_unavailable") from last_model_error
+    raise OllamaHelperError("model_unavailable") from last_model_error
 
 
-def enhance_with_gemini(
+def enhance_with_ollama(
     api_key: str,
     code: str,
     analysis: StaticAnalysisResult,
     score: ScoreBreakdown,
     plan: OptimizationPlan,
+    model_name: str = "",
 ) -> Optional[str]:
-    """Return an optional Gemini-generated coaching summary.
+    """Return an optional Ollama-generated coaching summary.
 
-    Gemini is not used for benchmark measurements, scoring, or static estimates.
+    Ollama is not used for benchmark measurements, scoring, or static estimates.
     If the package/key is unavailable, the caller receives a readable message.
     """
     if not api_key:
@@ -174,12 +144,15 @@ Return concise Markdown with exactly these headings:
 ## Edge-Case Questions
 """
     try:
-        text = _request_gemini_text(api_key, prompt)
-    except GeminiHelperError as exc:
-        return f"Gemini enhancement failed. {_gemini_error_message(exc.category)}"
+        if model_name:
+            text = _request_ollama_text(api_key, prompt, model_name=model_name)
+        else:
+            text = _request_ollama_text(api_key, prompt)
+    except OllamaHelperError as exc:
+        return f"Ollama enhancement failed. {_ollama_error_message(exc.category)}"
     except Exception as exc:
-        return f"Gemini enhancement failed. {_gemini_error_message(_classify_gemini_error(exc))}"
-    return text or "Gemini returned an empty response."
+        return f"Ollama enhancement failed. {_ollama_error_message(_classify_ollama_error(exc))}"
+    return text or "Ollama returned an empty response."
 
 
 def _extract_json_object(text: str) -> dict:
@@ -197,7 +170,7 @@ def _extract_json_object(text: str) -> dict:
         raise
 
 
-def generate_optimized_code_with_gemini(
+def generate_optimized_code_with_ollama(
     api_key: str,
     code: str,
     analysis: StaticAnalysisResult,
@@ -207,15 +180,18 @@ def generate_optimized_code_with_gemini(
     level: str = "medium_refactor",
     retry_count: int = 0,
     rejection_reasons: Optional[list] = None,
+    model_name: str = "",
 ) -> tuple[Optional[OptimizedCodeCandidate], Optional[str]]:
-    """Ask Gemini for one structured optimized-code candidate.
+    """Ask Ollama for one structured optimized-code candidate.
 
     The returned candidate is not trusted by the app until the local planner
     validates syntax, safety checks, entrypoint preservation, and estimated
     complexity/score improvement.
     """
     if not api_key:
-        return None, "Gemini API key was not provided."
+        api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if not api_key:
+        return None, "Ollama API key was not provided."
     level_titles = {
         "quick_win": "Quick Win",
         "medium_refactor": "Medium Refactor",
@@ -317,14 +293,17 @@ Original code:
 ```
 """
     try:
-        text = _request_gemini_text(api_key, prompt, json_mode=True)
+        if model_name:
+            text = _request_ollama_text(api_key, prompt, json_mode=True, model_name=model_name)
+        else:
+            text = _request_ollama_text(api_key, prompt, json_mode=True)
         payload = _extract_json_object(text)
-    except GeminiHelperError as exc:
-        return None, f"Gemini optimization generation failed. {_gemini_error_message(exc.category)}"
+    except OllamaHelperError as exc:
+        return None, f"Ollama optimization generation failed. {_ollama_error_message(exc.category)}"
     except (json.JSONDecodeError, ValueError):
-        return None, f"Gemini optimization generation failed. {_gemini_error_message('malformed_response')}"
+        return None, f"Ollama optimization generation failed. {_ollama_error_message('malformed_response')}"
     except Exception as exc:
-        return None, f"Gemini optimization generation failed. {_gemini_error_message(_classify_gemini_error(exc))}"
+        return None, f"Ollama optimization generation failed. {_ollama_error_message(_classify_ollama_error(exc))}"
 
     optimized_code = str(payload.get("optimized_code", "")).strip()
     steps = payload.get("step_by_step_plan", [])
@@ -334,10 +313,10 @@ Original code:
     if not isinstance(tests, list):
         tests = []
     if not optimized_code:
-        return None, "Gemini did not return optimized_code."
+        return None, "Ollama did not return optimized_code."
 
     return OptimizedCodeCandidate(
-        source="gemini",
+        source="ollama",
         code=optimized_code,
         explanation=str(payload.get("explanation", "")).strip(),
         level=level,
@@ -349,3 +328,88 @@ Original code:
         confidence=0.72,
         retry_count=retry_count,
     ), None
+
+
+def generate_test_cases_with_ollama(
+    api_key: str,
+    code: str,
+    definition: EntrypointDefinition,
+    model_name: str = "",
+    target_count: int = DEFAULT_BENCHMARK_CASE_COUNT,
+) -> tuple[list[GeneratedTestCase], str]:
+    """Ask Ollama for benchmark-ready cases for the selected entrypoint."""
+    api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
+    if not api_key:
+        return [], "Ollama API key was not provided."
+    signature = {
+        "entrypoint": definition.callable_name,
+        "args": definition.benchmark_args,
+        "required_positional_count": definition.required_positional_count,
+        "keyword_only_args": definition.keyword_only_args,
+        "required_keyword_only_args": definition.required_keyword_only_args,
+        "annotations": definition.annotations,
+    }
+    prompt = f"""
+Generate exactly {target_count} executable benchmark test cases for this Python entrypoint.
+Return JSON only with this exact shape:
+{{
+  "test_cases": [
+    {{"name": "short name", "input": {{"args": [], "kwargs": {{}}}}, "expected_output": ""}}
+  ]
+}}
+
+Entrypoint signature facts:
+```json
+{json.dumps(signature, indent=2)}
+```
+
+Rules:
+- Generate exactly {target_count} test cases.
+- Every input must be JSON-compatible.
+- Prefer kwargs matching the entrypoint argument names.
+- Cover empty, tiny, duplicate, negative, sorted, reverse-sorted, medium, and stress-style cases when relevant.
+- Do not include code fences or Markdown.
+
+Code:
+```python
+{code[:6000]}
+```
+"""
+    try:
+        if model_name:
+            text = _request_ollama_text(api_key, prompt, json_mode=True, model_name=model_name)
+        else:
+            text = _request_ollama_text(api_key, prompt, json_mode=True)
+        payload = _extract_json_object(text)
+    except OllamaHelperError as exc:
+        return [], _ollama_error_message(exc.category)
+    except Exception as exc:
+        return [], _ollama_error_message(_classify_ollama_error(exc))
+
+    raw_cases = payload.get("test_cases", [])
+    if not isinstance(raw_cases, list):
+        return [], "Ollama did not return a test_cases list."
+    cases: list[GeneratedTestCase] = []
+    for index, item in enumerate(raw_cases, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_input = item.get("input", {"args": [], "kwargs": {}})
+        if not isinstance(raw_input, dict):
+            raw_input = {"args": [raw_input], "kwargs": {}}
+        args = raw_input.get("args", [])
+        kwargs = raw_input.get("kwargs", {})
+        if not isinstance(args, list):
+            args = [args]
+        if not isinstance(kwargs, dict):
+            kwargs = {}
+        cases.append(
+            GeneratedTestCase(
+                name=str(item.get("name", f"LLM case {index}") or f"LLM case {index}"),
+                benchmark_input=json.dumps({"args": args, "kwargs": kwargs}, ensure_ascii=False),
+                expected_output=str(item.get("expected_output", item.get("expected", "")) or ""),
+                reason="Generated by the selected LLM model.",
+            )
+        )
+    if len(cases) != target_count:
+        return [], f"Ollama returned {len(cases)} valid test case(s), expected {target_count}."
+    return cases, ""
