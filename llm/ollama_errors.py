@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_OLLAMA_MODEL = "qwen3-coder-next:cloud"
+DEFAULT_OLLAMA_MODEL = "deepseek-v4-pro:cloud"
 OLLAMA_MODEL_FALLBACKS = (DEFAULT_OLLAMA_MODEL,)
 OLLAMA_HOST = "https://ollama.com"
 
@@ -87,7 +87,7 @@ def ollama_error_message(category: str) -> str:
         "quota": "Ollama quota or rate limit was reached. Try again later.",
         "model_unavailable": (
             "Ollama Cloud request failed for the selected model. "
-            "Check that your account can access qwen3-coder-next:cloud."
+            "Check that your account can access deepseek-v4-pro:cloud."
         ),
         "malformed_response": "Ollama responded, but not in the expected format. Try again.",
         "missing_package": "The Ollama Python SDK is not installed. Install ollama and try again.",

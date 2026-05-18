@@ -161,7 +161,7 @@ For public deployments, enable `Static-only public mode` in the sidebar when dem
 
 Ollama Cloud is optional. The app works fully without it.
 
-To use Ollama-enhanced coaching with `qwen3-coder-next:cloud` on Ollama Cloud:
+To use Ollama-enhanced coaching with `deepseek-v4-pro:cloud` on Ollama Cloud:
 
 1. Install dependencies from `requirements.txt`.
 2. Create a local `.env` file in the project root:
@@ -181,7 +181,7 @@ Ollama receives a compact JSON object of local facts and is used only to improve
 - static complexity estimates,
 - optimization scoring.
 
-The fixed Ollama Cloud model is `qwen3-coder-next:cloud`.
+The fixed Ollama Cloud model is `deepseek-v4-pro:cloud`.
 
 Ollama API projects can still hit model, account, or rate limits. When Algorithm Planner receives an Ollama quota or rate-limit response, Complexity Lab returns a local fallback optimization plan instead of blocking the workflow with a hard error.
 
