@@ -14,6 +14,17 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_OLLAMA_MODEL = "deepseek-v4-flash:cloud"
 OLLAMA_MODEL_FALLBACKS = (DEFAULT_OLLAMA_MODEL, "qwen3-coder-next:cloud")
+OLLAMA_MODEL_OPTIONS = {
+    "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
+    "DeepSeek V4 Pro": "deepseek-v4-pro:cloud",
+    "Kimi K2.6": "kimi-k2.6:cloud",
+    "GLM-5.1": "glm-5.1:cloud",
+    "MiniMax M2.7": "minimax-m2.7:cloud",
+    "Gemma 4": "gemma4:cloud",
+    "Nemotron 3 Super": "nemotron-3-super:cloud",
+    "Qwen 3.5": "qwen3.5:cloud",
+    "GPT OSS 120B": "gpt-oss:120b",
+}
 OLLAMA_HOST = "https://ollama.com"
 
 
@@ -23,8 +34,20 @@ class OllamaErrorDiagnostic:
     text: str
 
 
-def model_candidates() -> list[str]:
-    return list(OLLAMA_MODEL_FALLBACKS)
+def normalize_model_name(model_name: str = "") -> str:
+    clean = (model_name or "").strip()
+    if not clean:
+        return ""
+    return OLLAMA_MODEL_OPTIONS.get(clean, clean)
+
+
+def model_candidates(preferred_model: str = "") -> list[str]:
+    candidates: list[str] = []
+    preferred = normalize_model_name(preferred_model)
+    if preferred:
+        candidates.append(preferred)
+    candidates.extend(OLLAMA_MODEL_FALLBACKS)
+    return list(dict.fromkeys(candidates))
 
 
 def ollama_error_diagnostic(exc: Exception) -> OllamaErrorDiagnostic:

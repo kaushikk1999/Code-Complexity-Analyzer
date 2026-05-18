@@ -12,6 +12,14 @@ from llm.algorithm_planner import (
     benchmark_planner_solution,
     generate_algorithm_optimization_plan,
 )
+from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT
+
+
+def _planner_cases(count: int = DEFAULT_BENCHMARK_CASE_COUNT):
+    return [
+        {"name": f"case {index}", "input": {"args": [index]}, "expected_output": index + 1}
+        for index in range(count)
+    ]
 
 
 def test_empty_question_returns_validation_error():
@@ -102,7 +110,7 @@ def test_unsafe_generated_code_is_blocked_before_benchmark(monkeypatch):
             "entrypoint": "solve",
             "time_complexity": "O(1)",
             "space_complexity": "O(1)",
-            "test_cases": [{"name": "basic", "input": {"args": []}, "expected_output": 1}],
+            "test_cases": _planner_cases(),
         }
 
     monkeypatch.setattr(algorithm_planner, "_generate_with_ollama", unsafe_payload)
@@ -125,10 +133,7 @@ def test_safe_generated_code_reports_peak_runtime(monkeypatch):
             "entrypoint": "solve",
             "time_complexity": "O(1)",
             "space_complexity": "O(1)",
-            "test_cases": [
-                {"name": "small", "input": {"args": [1]}, "expected_output": 2},
-                {"name": "larger", "input": {"args": [100]}, "expected_output": 101},
-            ],
+            "test_cases": _planner_cases(),
         }
 
     monkeypatch.setattr(algorithm_planner, "_generate_with_ollama", safe_payload)
@@ -148,13 +153,40 @@ def test_benchmark_planner_solution_uses_peak_runtime_label_only():
     runtime = benchmark_planner_solution(
         "def solve(value):\n    return value * 2\n",
         "solve",
-        [PlannerTestCase(name="basic", input_text='{"args": [4]}', expected_output="8")],
+        [
+            PlannerTestCase(name=f"case {index}", input_text=f'{{"args": [{index}]}}', expected_output=str(index * 2))
+            for index in range(DEFAULT_BENCHMARK_CASE_COUNT)
+        ],
     )
 
     assert runtime.measured
     assert runtime.display_value.endswith(" ms")
+    assert runtime.memory_display_value.endswith(" KB")
     assert "Peak Runtime" in PLANNER_OUTPUT_LABELS
+    assert "Peak Memory" in PLANNER_OUTPUT_LABELS
     assert "Average Runtime" not in PLANNER_OUTPUT_LABELS
+
+
+def test_planner_rejects_fewer_than_40_cases(monkeypatch):
+    def short_payload(question: str, api_key: str):
+        return {
+            "problem_understanding": "Too few cases.",
+            "step_by_step_optimization_plan": ["Return x."],
+            "best_data_structure_algorithm_choice": "Simple arithmetic",
+            "final_optimized_python_code": "def solve(value):\n    return value\n",
+            "entrypoint": "solve",
+            "time_complexity": "O(1)",
+            "space_complexity": "O(1)",
+            "test_cases": _planner_cases(2),
+        }
+
+    monkeypatch.setattr(algorithm_planner, "_generate_with_ollama", short_payload)
+
+    result = generate_algorithm_optimization_plan("Return the value.", "fake-key")
+
+    assert not result.valid
+    assert "40 are required" in result.error
+    assert not result.runtime.measured
 
 
 def test_algorithm_planner_uses_env_key_without_sidebar_ollama_key_input():

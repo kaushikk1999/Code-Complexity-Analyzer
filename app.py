@@ -26,7 +26,9 @@ from llm import (
     enhance_with_ollama,
     generate_algorithm_optimization_plan,
     generate_optimized_code_with_ollama,
+    generate_test_cases_with_ollama,
 )
+from llm.ollama_errors import DEFAULT_OLLAMA_MODEL, OLLAMA_MODEL_OPTIONS, normalize_model_name
 from optimization import (
     OptimizationPlan,
     OptimizationStep,
@@ -44,11 +46,16 @@ from utils.constants import (
     HISTORY_LIMIT,
     MAX_CODE_CHARS,
 )
-from utils.entrypoints import choose_entrypoint, discover_entrypoints
+from utils.entrypoints import choose_entrypoint, discover_entrypoints, find_entrypoint_definition
 from utils.examples import EXAMPLES, get_example
 from utils.history_store import load_recent_records, progress_summary, save_analysis_record
 from utils.report_export import build_html_report, build_linkedin_summary, build_markdown_report
-from utils.test_case_generator import build_benchmark_batch_input, generate_test_cases
+from utils.test_case_generator import (
+    DEFAULT_BENCHMARK_CASE_COUNT,
+    benchmark_payload_case_count,
+    generate_test_cases,
+    merge_generated_and_custom_benchmark_input,
+)
 from visualization.charts import (
     history_chart,
     memory_chart,
@@ -67,6 +74,17 @@ from visualization.ui_helpers import (
 )
 
 LEGACY_DEFAULT_BENCHMARK_INPUT = '{"args": [[2, 7, 11, 15, 21, 30, 42, 55], 57]}'
+LLM_MODEL_HELP = {
+    "DeepSeek V4 Flash": "Efficient preview of the DeepSeek-V4 MoE series with a 1M-token context window.",
+    "DeepSeek V4 Pro": "Frontier DeepSeek-V4 MoE model with a 1M-token context window and reasoning modes.",
+    "Kimi K2.6": "Long-horizon coding, coding-driven design, autonomous execution, and orchestration.",
+    "GLM-5.1": "Flagship agentic engineering model with stronger coding capabilities.",
+    "MiniMax M2.7": "Coding, agentic workflows, and professional productivity.",
+    "Gemma 4": "Reasoning, agentic workflows, coding, and multimodal understanding.",
+    "Nemotron 3 Super": "Efficient open MoE model for complex multi-agent applications.",
+    "Qwen 3.5": "Open multimodal model family with strong utility and performance.",
+    "GPT OSS 120B": "Large open-weight GPT OSS model.",
+}
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -104,6 +122,7 @@ def _initialize_state() -> None:
         "code_analyzer_plan_submit_pending": False,
         "benchmark_input_widget_version": 0,
         "ollama_api_key": "",
+        "selected_llm_model": "DeepSeek V4 Flash",
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
@@ -112,6 +131,8 @@ def _initialize_state() -> None:
         "interview_answer": "",
         "benchmark_input_entrypoint": "",
         "generated_test_cases": [],
+        "generated_test_case_source": "local",
+        "generated_test_case_note": "",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -128,6 +149,8 @@ def _clear_outputs() -> None:
     st.session_state.ollama_text = None
     st.session_state.answer_grade = None
     st.session_state.generated_test_cases = []
+    st.session_state.generated_test_case_source = "local"
+    st.session_state.generated_test_case_note = ""
 
 
 def _queue_ollama_submit(flag_key: str) -> None:
@@ -140,16 +163,29 @@ def _resolve_ollama_key_for_action(source: str, fallback_key: str = "") -> Optio
         return api_key
 
     st.warning(
-        "Ollama API key is not configured. Add OLLAMA_API_KEY to the local .env file to enable Qwen-powered "
-        "optimization. Complexity Lab will use its local deterministic optimizer for this run."
+        "Ollama API key is not configured. Add OLLAMA_API_KEY to the local .env file to enable LLM-powered "
+        "optimization and test-case generation. Complexity Lab will use local deterministic fallbacks for this run."
     )
     return ""
+
+
+def _selected_ollama_model() -> str:
+    return normalize_model_name(str(st.session_state.get("selected_llm_model", "") or "")) or DEFAULT_OLLAMA_MODEL
 
 
 def _validation_benchmark_input() -> str:
     if st.session_state.get("static_only_mode", False):
         return ""
-    return str(st.session_state.get("benchmark_input", "") or "")
+    return merge_generated_and_custom_benchmark_input(
+        st.session_state.get("generated_test_cases", []),
+        str(st.session_state.get("benchmark_input", "") or ""),
+    )
+
+
+def _has_mandatory_benchmark_baseline(benchmark: Optional[BenchmarkResult]) -> bool:
+    if not benchmark or not benchmark.success:
+        return False
+    return len({run.case_index for run in benchmark.runs}) >= DEFAULT_BENCHMARK_CASE_COUNT
 
 
 def _benchmark_input_widget_key() -> str:
@@ -174,17 +210,41 @@ def _refresh_benchmark_input_for_entrypoint(force: bool = False) -> None:
 
 
 def _autofill_benchmark_input_from_generated_cases(force: bool = False) -> None:
-    cases = st.session_state.get("generated_test_cases", [])
-    generated_input = build_benchmark_batch_input(cases)
-    if not generated_input:
-        return
-
     current_input = str(st.session_state.get("benchmark_input", "") or "").strip()
     current_entrypoint = str(st.session_state.get("entrypoint", "") or "")
     last_entrypoint = str(st.session_state.get("benchmark_input_entrypoint", "") or "")
-    should_fill = force or not current_input or (current_entrypoint and current_entrypoint != last_entrypoint)
+    should_fill = force or (current_entrypoint and current_entrypoint != last_entrypoint)
     if should_fill:
-        _set_benchmark_input(generated_input, current_entrypoint)
+        _set_benchmark_input("" if not current_input or force else current_input, current_entrypoint)
+
+
+def _resolve_generated_test_cases(code: str, definitions, api_key: str = "") -> None:
+    definition = find_entrypoint_definition(definitions, st.session_state.entrypoint)
+    llm_key = str(api_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
+    if definition and llm_key:
+        llm_cases, llm_error = generate_test_cases_with_ollama(
+            api_key=llm_key,
+            code=code,
+            definition=definition,
+            model_name=_selected_ollama_model(),
+            target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+        )
+        if len(llm_cases) == DEFAULT_BENCHMARK_CASE_COUNT:
+            st.session_state.generated_test_cases = llm_cases
+            st.session_state.generated_test_case_source = "llm"
+            st.session_state.generated_test_case_note = ""
+            return
+        st.session_state.generated_test_case_note = llm_error or "LLM did not return the required 40 cases."
+    else:
+        st.session_state.generated_test_case_note = "Using local fallback cases because no Ollama API key is configured."
+
+    st.session_state.generated_test_cases = generate_test_cases(
+        code=code,
+        entrypoint=st.session_state.entrypoint,
+        definitions=definitions,
+        target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+    )
+    st.session_state.generated_test_case_source = "local"
 
 
 def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
@@ -213,11 +273,7 @@ def _analyze_current(
     analysis = analyze_code(code)
     score = calculate_optimization_score(analysis, benchmark)
     definitions = discover_entrypoints(code)
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-    )
+    _resolve_generated_test_cases(code, definitions, api_key=api_key)
     _refresh_benchmark_input_for_entrypoint()
     if autofill_benchmark_input:
         _autofill_benchmark_input_from_generated_cases()
@@ -244,18 +300,15 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
     code = st.session_state.editor_code
     _sync_entrypoint_with_code(update_state=True)
     definitions = discover_entrypoints(code)
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-    )
+    _resolve_generated_test_cases(code, definitions)
     _refresh_benchmark_input_for_entrypoint()
     _autofill_benchmark_input_from_generated_cases()
+    benchmark_input = _validation_benchmark_input()
     if st.session_state.docker_backend:
         benchmark = run_benchmark_in_docker(
             code=code,
             entrypoint=st.session_state.entrypoint,
-            input_text=st.session_state.benchmark_input,
+            input_text=benchmark_input,
             repeat_count=st.session_state.repeat_count or settings["repeat_count"],
             warmup_count=settings["warmup_count"],
             timeout_seconds=st.session_state.timeout_seconds or settings["timeout_seconds"],
@@ -264,7 +317,7 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
         benchmark = run_benchmark(
             code=code,
             entrypoint=st.session_state.entrypoint,
-            input_text=st.session_state.benchmark_input,
+            input_text=benchmark_input,
             repeat_count=st.session_state.repeat_count or settings["repeat_count"],
             warmup_count=settings["warmup_count"],
             timeout_seconds=st.session_state.timeout_seconds or settings["timeout_seconds"],
@@ -293,11 +346,7 @@ def _run_scaling() -> None:
     settings = profile_settings(st.session_state.benchmark_profile)
     _sync_entrypoint_with_code(update_state=True)
     definitions = discover_entrypoints(st.session_state.editor_code)
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=st.session_state.editor_code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-    )
+    _resolve_generated_test_cases(st.session_state.editor_code, definitions)
     _refresh_benchmark_input_for_entrypoint()
     _autofill_benchmark_input_from_generated_cases()
     sizes = st.session_state.scaling_sizes
@@ -308,7 +357,7 @@ def _run_scaling() -> None:
     scaling = run_scaling_benchmark(
         code=st.session_state.editor_code,
         entrypoint=st.session_state.entrypoint,
-        input_text=st.session_state.benchmark_input,
+        input_text=_validation_benchmark_input(),
         data_shape=st.session_state.scaling_shape,
         sizes=parsed_sizes or settings["sizes"],
         repeat_count=max(1, min(st.session_state.repeat_count, 10)),
@@ -329,6 +378,7 @@ def _generate_ollama_feedback(api_key: str) -> None:
             analysis=st.session_state.analysis,
             score=st.session_state.score,
             plan=st.session_state.plan,
+            model_name=_selected_ollama_model(),
         )
 
 
@@ -360,6 +410,7 @@ def _build_verified_optimization_plan(api_key: str) -> None:
                 level=level,
                 retry_count=0,
                 rejection_reasons=rejection_reasons,
+                model_name=_selected_ollama_model(),
             )
 
     plan = generate_verified_optimization_candidates(
@@ -456,11 +507,19 @@ def _render_summary_metrics(
         caption = f"{score.efficiency_percentage}% efficiency" if score else "Not scored"
         st.markdown(metric_card("Optimization Score", value, caption), unsafe_allow_html=True)
     with cols[3]:
-        peak_ms = f"{benchmark.summary.max_ms:.3f} ms" if benchmark and benchmark.success else "Not run"
-        st.markdown(metric_card("Peak Runtime", peak_ms, "Measured with perf_counter_ns"), unsafe_allow_html=True)
+        benchmark_ready = _has_mandatory_benchmark_baseline(benchmark)
+        peak_ms = f"{benchmark.summary.max_ms:.3f} ms" if benchmark_ready and benchmark else "Not run"
+        st.markdown(
+            metric_card("Peak Runtime", peak_ms, f"Requires {DEFAULT_BENCHMARK_CASE_COUNT} generated cases"),
+            unsafe_allow_html=True,
+        )
     with cols[4]:
-        peak = f"{benchmark.summary.max_peak_memory_kb:.1f} KB" if benchmark and benchmark.success else "Not run"
-        st.markdown(metric_card("Peak Memory", peak, "Measured with tracemalloc"), unsafe_allow_html=True)
+        benchmark_ready = _has_mandatory_benchmark_baseline(benchmark)
+        peak = f"{benchmark.summary.max_peak_memory_kb:.1f} KB" if benchmark_ready and benchmark else "Not run"
+        st.markdown(
+            metric_card("Peak Memory", peak, f"Requires {DEFAULT_BENCHMARK_CASE_COUNT} generated cases"),
+            unsafe_allow_html=True,
+        )
 
 
 def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
@@ -541,10 +600,17 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
     generated_cases = st.session_state.get("generated_test_cases", [])
     if generated_cases:
         st.subheader("Generated Test Cases")
-        st.caption("These are locally generated from the detected entrypoint and code shape.")
+        source = str(st.session_state.get("generated_test_case_source", "local") or "local").upper()
+        note = str(st.session_state.get("generated_test_case_note", "") or "")
+        st.caption(
+            f"{len(generated_cases)} mandatory benchmark cases generated by {source}. "
+            "Custom benchmark input is appended to these cases."
+        )
+        if note and source == "LOCAL":
+            st.info(note)
 
         for index, case in enumerate(generated_cases, start=1):
-            with st.expander(f"Test case {index}: {case.name}", expanded=index == 1):
+            with st.expander(f"Test case {index}: {case.name}", expanded=index <= 3):
                 st.code(case.benchmark_input, language="json")
                 if case.expected_output:
                     st.write(f"Expected output: `{case.expected_output}`")
@@ -552,11 +618,11 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
                     st.caption(case.reason)
 
                 if st.button(
-                    f"Use as benchmark input #{index}",
+                    f"Append as custom input #{index}",
                     key=f"use_generated_case_{index}",
                 ):
                     _set_benchmark_input(case.benchmark_input, st.session_state.entrypoint)
-                    st.success("Benchmark input updated from generated test case.")
+                    st.success("Custom benchmark input updated. It will be appended after the 40 generated cases.")
                     _rerun()
 
     if analysis.anti_patterns:
@@ -597,13 +663,22 @@ def _render_benchmark_tab(
     elif not benchmark.success:
         st.error(benchmark.error or "Benchmark failed.")
         st.info("Static analysis is still available even when execution is blocked or fails.")
+    elif not _has_mandatory_benchmark_baseline(benchmark):
+        st.warning(f"Peak runtime and memory require at least {DEFAULT_BENCHMARK_CASE_COUNT} generated cases.")
     else:
         cols = st.columns(4)
         cols[0].metric("Min runtime", f"{benchmark.summary.min_ms:.4f} ms")
         cols[1].metric("Peak Runtime", f"{benchmark.summary.max_ms:.4f} ms")
         cols[2].metric("Std dev", f"{benchmark.summary.std_ms:.4f} ms")
         cols[3].metric("Peak memory", f"{benchmark.summary.max_peak_memory_kb:.2f} KB")
-        st.caption(f"Benchmark input: {benchmark.input_description}. Total measured executions: {benchmark.summary.repeat_count}.")
+        default_cases = min(DEFAULT_BENCHMARK_CASE_COUNT, len({run.case_index for run in benchmark.runs}))
+        total_cases = len({run.case_index for run in benchmark.runs})
+        custom_cases = max(0, total_cases - default_cases)
+        st.caption(
+            f"Benchmark input: {benchmark.input_description}. "
+            f"Default generated cases: {default_cases}. Custom appended cases: {custom_cases}. "
+            f"Total measured executions: {benchmark.summary.repeat_count}."
+        )
         chart_cols = st.columns(2)
         with chart_cols[0]:
             st.plotly_chart(runtime_chart(benchmark))
@@ -1003,7 +1078,7 @@ def _render_algorithm_planner_result(result: AlgorithmPlannerResult) -> None:
     else:
         st.info("Not generated in local mode or blocked by safety validation.")
 
-    complexity_cols = st.columns(3)
+    complexity_cols = st.columns(4)
     with complexity_cols[0]:
         st.markdown(
             metric_card("Time Complexity", result.time_complexity or "Not available", "Big-O analysis"),
@@ -1019,9 +1094,14 @@ def _render_algorithm_planner_result(result: AlgorithmPlannerResult) -> None:
             metric_card("Peak Runtime", result.runtime.display_value, "Measured only when safe test cases run"),
             unsafe_allow_html=True,
         )
+    with complexity_cols[3]:
+        st.markdown(
+            metric_card("Peak Memory", result.runtime.memory_display_value, "Measured across 40 generated cases"),
+            unsafe_allow_html=True,
+        )
     st.caption(result.complexity_note)
     if result.runtime.details:
-        with st.expander("Peak runtime measurement details"):
+        with st.expander("Peak runtime and memory measurement details"):
             for detail in result.runtime.details:
                 st.write(f"- {detail}")
 
@@ -1073,6 +1153,7 @@ def _render_algorithm_planner_tab() -> None:
             st.session_state.algorithm_planner_result = generate_algorithm_optimization_plan(
                 current_question,
                 current_api_key,
+                model_name=_selected_ollama_model(),
             )
 
     result = st.session_state.algorithm_planner_result
@@ -1207,6 +1288,21 @@ def main() -> None:
                 _rerun()
 
         st.divider()
+        st.markdown("#### LLM model")
+        if st.session_state.get("selected_llm_model") not in OLLAMA_MODEL_OPTIONS:
+            st.session_state.selected_llm_model = "DeepSeek V4 Flash"
+        st.selectbox(
+            "Use model for optimized code",
+            list(OLLAMA_MODEL_OPTIONS.keys()),
+            key="selected_llm_model",
+            help="Used for Ollama-powered algorithm planning and optimized-code generation.",
+        )
+        selected_model_label = str(st.session_state.get("selected_llm_model", "") or "")
+        selected_model_id = _selected_ollama_model()
+        st.caption(LLM_MODEL_HELP.get(selected_model_label, "Selected Ollama model."))
+        st.caption(f"Model id: `{selected_model_id}`")
+
+        st.divider()
         st.checkbox(
             "Static-only public mode",
             key="static_only_mode",
@@ -1244,24 +1340,33 @@ def main() -> None:
                 help="No functions were detected. Leave blank to benchmark top-level script execution.",
             )
         definitions = discover_entrypoints(str(st.session_state.get("editor_code", "") or ""))
-        st.session_state.generated_test_cases = generate_test_cases(
-            code=str(st.session_state.get("editor_code", "") or ""),
-            entrypoint=st.session_state.entrypoint,
-            definitions=definitions,
-        )
+        if not st.session_state.get("generated_test_cases"):
+            st.session_state.generated_test_cases = generate_test_cases(
+                code=str(st.session_state.get("editor_code", "") or ""),
+                entrypoint=st.session_state.entrypoint,
+                definitions=definitions,
+                target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+            )
+            st.session_state.generated_test_case_source = "local"
         _refresh_benchmark_input_for_entrypoint()
         benchmark_input_value = st.text_area(
-            "Benchmark input",
+            "Custom benchmark input",
             value=str(st.session_state.get("benchmark_input", "") or ""),
             key=_benchmark_input_widget_key(),
             height=140,
             help=(
-                'Leave blank until you are ready to run. Use {"args": [...], "kwargs": {...}}, '
+                f"Optional. The default benchmark always runs {DEFAULT_BENCHMARK_CASE_COUNT} generated cases first; "
+                'custom input is appended. Use {"args": [...], "kwargs": {...}}, '
                 'simple assignments like arr = [1, 2, 3], {"stdin": "line1\\nline2\\n"} for input() code, '
                 'or multiple cases like [{"kwargs": {...}}, {"stdin": "..."}].'
             ),
         )
         st.session_state.benchmark_input = benchmark_input_value
+        custom_count = benchmark_payload_case_count(benchmark_input_value)
+        st.caption(
+            f"Default benchmark uses {DEFAULT_BENCHMARK_CASE_COUNT} generated cases; "
+            f"custom appended cases: {custom_count}."
+        )
         st.slider("Benchmark repeats", min_value=1, max_value=30, value=DEFAULT_REPEAT_COUNT, key="repeat_count")
         st.slider(
             "Timeout seconds",

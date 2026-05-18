@@ -19,6 +19,7 @@ from llm.ollama_errors import (
 )
 from optimization.planner import generate_verified_optimization_candidates
 from scoring import calculate_optimization_score
+from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT
 
 PLANNER_OUTPUT_LABELS = (
     "Problem Understanding",
@@ -28,6 +29,7 @@ PLANNER_OUTPUT_LABELS = (
     "Time Complexity",
     "Space Complexity",
     "Peak Runtime",
+    "Peak Memory",
     "Test Cases",
 )
 
@@ -56,6 +58,7 @@ class PlannerTestCase:
 class PlannerRuntimeResult:
     measured: bool = False
     peak_runtime_ms: Optional[float] = None
+    peak_memory_kb: Optional[float] = None
     details: List[str] = field(default_factory=list)
     error: str = ""
 
@@ -64,6 +67,12 @@ class PlannerRuntimeResult:
         if not self.measured or self.peak_runtime_ms is None:
             return "Not measured"
         return f"{self.peak_runtime_ms:.4f} ms"
+
+    @property
+    def memory_display_value(self) -> str:
+        if not self.measured or self.peak_memory_kb is None:
+            return "Not measured"
+        return f"{self.peak_memory_kb:.2f} KB"
 
 
 @dataclass
@@ -168,7 +177,7 @@ def _coerce_test_cases(value: Any) -> List[PlannerTestCase]:
                 expected_output=_stringify(expected),
             )
         )
-    return cases[:8]
+    return cases
 
 
 def benchmark_planner_solution(
@@ -176,10 +185,10 @@ def benchmark_planner_solution(
     entrypoint: str,
     test_cases: List[PlannerTestCase],
 ) -> PlannerRuntimeResult:
-    """Benchmark a generated planner solution and report only peak runtime."""
+    """Benchmark a generated planner solution and report peak runtime and memory."""
     code = (code or "").strip()
     entrypoint = (entrypoint or "").strip()
-    if not code or not entrypoint or not test_cases:
+    if not code or not entrypoint or len(test_cases) < DEFAULT_BENCHMARK_CASE_COUNT:
         return PlannerRuntimeResult(error="Peak Runtime: Not measured")
 
     violations = validate_code_for_execution(code)
@@ -187,6 +196,7 @@ def benchmark_planner_solution(
         return PlannerRuntimeResult(error="Peak Runtime: Not measured")
 
     peaks: List[float] = []
+    peak_memory: List[float] = []
     details: List[str] = []
     for test_case in test_cases:
         result = run_benchmark(
@@ -200,7 +210,11 @@ def benchmark_planner_solution(
         )
         if result.success:
             peaks.append(result.summary.max_ms)
-            details.append(f"{test_case.name}: peak {result.summary.max_ms:.4f} ms")
+            peak_memory.append(result.summary.max_peak_memory_kb)
+            details.append(
+                f"{test_case.name}: peak {result.summary.max_ms:.4f} ms, "
+                f"{result.summary.max_peak_memory_kb:.2f} KB"
+            )
         else:
             details.append(f"{test_case.name}: not measured")
 
@@ -209,6 +223,7 @@ def benchmark_planner_solution(
     return PlannerRuntimeResult(
         measured=True,
         peak_runtime_ms=round(max(peaks), 4),
+        peak_memory_kb=round(max(peak_memory), 4) if peak_memory else None,
         details=details,
     )
 
@@ -277,7 +292,7 @@ def _local_plan(question: str) -> AlgorithmPlannerResult:
 
 def _planner_prompt(question: str) -> str:
     return f"""
-You are an expert competitive programmer. Given the following coding problem, produce the most time- and space-efficient Python solution. First explain the problem, then provide a step-by-step optimization plan, then identify the best data structure or algorithm, then produce the simplest correct optimized Python code. Include time complexity and space complexity. Prefer clear, maintainable Python. Do not over-engineer if a simple approach is already optimal. Include test cases. Problem: {question}
+You are an expert competitive programmer. Given the following coding problem, produce the most time- and space-efficient Python solution. First explain the problem, then provide a step-by-step optimization plan, then identify the best data structure or algorithm, then produce the simplest correct optimized Python code. Include time complexity and space complexity. Prefer clear, maintainable Python. Do not over-engineer if a simple approach is already optimal. Include exactly {DEFAULT_BENCHMARK_CASE_COUNT} test cases. Problem: {question}
 
 Return JSON only with this exact shape:
 {{
@@ -298,12 +313,13 @@ Rules:
 - Use the best data structure or algorithm only when it is actually needed.
 - Avoid unnecessary imports and avoid file, process, network, introspection, and dynamic execution APIs.
 - Test case inputs must be JSON-compatible arguments for the entrypoint function.
+- Return exactly {DEFAULT_BENCHMARK_CASE_COUNT} test cases. Runtime and memory will not be shown if fewer cases are returned.
 - Do not claim Big-O complexity is exact measured runtime.
 """
 
 
-def _model_candidates() -> List[str]:
-    return model_candidates()
+def _model_candidates(preferred_model: str = "") -> List[str]:
+    return model_candidates(preferred_model)
 
 
 def _classify_ollama_error(exc: Exception) -> str:
@@ -341,7 +357,7 @@ def _generate_content(client: Any, model_name: str, prompt: str, json_mode: bool
     return _extract_message_text(client.chat(**request))
 
 
-def _generate_with_ollama(question: str, api_key: str) -> Dict[str, Any]:
+def _generate_with_ollama(question: str, api_key: str, model_name: str = "") -> Dict[str, Any]:
     # The API key is used only to construct this request-scoped client.
     api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
     if not api_key:
@@ -355,9 +371,9 @@ def _generate_with_ollama(question: str, api_key: str) -> Dict[str, Any]:
     prompt = _planner_prompt(question)
     last_model_error: Exception | None = None
 
-    for model_name in _model_candidates():
+    for candidate_model in _model_candidates(model_name):
         try:
-            text = _generate_content(client, model_name, prompt, json_mode=True)
+            text = _generate_content(client, candidate_model, prompt, json_mode=True)
         except Exception as exc:
             category = _classify_ollama_error(exc)
             if category == "model_unavailable":
@@ -403,6 +419,14 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
         result.valid = False
         result.error = "Ollama did not return optimized Python code."
         return result
+    if len(test_cases) != DEFAULT_BENCHMARK_CASE_COUNT:
+        result.valid = False
+        result.error = (
+            f"Ollama returned {len(test_cases)} executable test case(s); "
+            f"{DEFAULT_BENCHMARK_CASE_COUNT} are required before runtime or memory metrics can be shown."
+        )
+        result.runtime = PlannerRuntimeResult(error="Peak Runtime: Not measured")
+        return result
 
     violations = validate_code_for_execution(code)
     if violations:
@@ -423,7 +447,17 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
                 analysis=analysis,
                 score=score,
                 entrypoint=entrypoint,
-                benchmark_input=test_cases[0].input_text,
+                benchmark_input=json.dumps(
+                    {
+                        "cases": [
+                            {
+                                **json.loads(test_case.input_text),
+                                "name": test_case.name,
+                            }
+                            for test_case in test_cases
+                        ]
+                    }
+                ),
             )
             if verified_plan.best_candidate:
                 result.final_optimized_python_code = verified_plan.best_candidate.code
@@ -437,7 +471,11 @@ def _result_from_payload(payload: Dict[str, Any]) -> AlgorithmPlannerResult:
     return result
 
 
-def generate_algorithm_optimization_plan(question: str, api_key: str = "") -> AlgorithmPlannerResult:
+def generate_algorithm_optimization_plan(
+    question: str,
+    api_key: str = "",
+    model_name: str = "",
+) -> AlgorithmPlannerResult:
     question = (question or "").strip()
     api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
     if not question:
@@ -451,7 +489,10 @@ def generate_algorithm_optimization_plan(question: str, api_key: str = "") -> Al
         return _local_plan(question)
 
     try:
-        payload = _generate_with_ollama(question, api_key)
+        if model_name:
+            payload = _generate_with_ollama(question, api_key, model_name=model_name)
+        else:
+            payload = _generate_with_ollama(question, api_key)
     except OllamaPlannerError as exc:
         if exc.category == "quota":
             result = _local_plan(question)

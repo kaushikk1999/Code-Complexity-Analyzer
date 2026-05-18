@@ -9,6 +9,8 @@ from llm import ollama_errors
 from llm import ollama_helper
 from optimization.planner import OptimizationPlan
 from scoring.optimizer_score import ScoreBreakdown
+from utils.entrypoints import EntrypointDefinition
+from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT
 
 
 def _fixtures():
@@ -212,6 +214,26 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
     assert candidates == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
 
 
+def test_visible_ollama_model_options_are_restricted_to_approved_models():
+    expected = {
+        "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
+        "DeepSeek V4 Pro": "deepseek-v4-pro:cloud",
+        "Kimi K2.6": "kimi-k2.6:cloud",
+        "GLM-5.1": "glm-5.1:cloud",
+        "MiniMax M2.7": "minimax-m2.7:cloud",
+        "Gemma 4": "gemma4:cloud",
+        "Nemotron 3 Super": "nemotron-3-super:cloud",
+        "Qwen 3.5": "qwen3.5:cloud",
+        "GPT OSS 120B": "gpt-oss:120b",
+    }
+
+    assert ollama_errors.OLLAMA_MODEL_OPTIONS == expected
+    assert "GLM-5" not in ollama_errors.OLLAMA_MODEL_OPTIONS
+    assert "MiniMax M2.5" not in ollama_errors.OLLAMA_MODEL_OPTIONS
+    for label, model_id in expected.items():
+        assert ollama_errors.normalize_model_name(label) == model_id
+
+
 def test_generate_optimized_code_uses_env_api_key(monkeypatch):
     secret = "SECRET_TEST_KEY"
     analysis, score, plan = _fixtures()
@@ -244,6 +266,53 @@ def test_generate_optimized_code_uses_env_api_key(monkeypatch):
 
     assert error is None
     assert candidate is not None
+
+
+def test_generate_test_cases_with_ollama_requires_40_valid_cases(monkeypatch):
+    secret = "SECRET_TEST_KEY"
+    definition = EntrypointDefinition(name="solve", qualified_name="solve", args=["value"])
+
+    def success(api_key: str, prompt: str, *, json_mode: bool = False):
+        assert api_key == secret
+        assert json_mode
+        return json.dumps(
+            {
+                "test_cases": [
+                    {"name": f"case {index}", "input": {"args": [index]}, "expected_output": index}
+                    for index in range(DEFAULT_BENCHMARK_CASE_COUNT)
+                ]
+            }
+        )
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", success)
+
+    cases, error = ollama_helper.generate_test_cases_with_ollama(
+        secret,
+        "def solve(value):\n    return value\n",
+        definition,
+    )
+
+    assert error == ""
+    assert len(cases) == DEFAULT_BENCHMARK_CASE_COUNT
+    assert cases[0].benchmark_input == '{"args": [0], "kwargs": {}}'
+
+
+def test_generate_test_cases_with_ollama_rejects_short_case_list(monkeypatch):
+    definition = EntrypointDefinition(name="solve", qualified_name="solve", args=["value"])
+
+    def too_short(api_key: str, prompt: str, *, json_mode: bool = False):
+        return json.dumps({"test_cases": [{"name": "one", "input": {"args": [1]}}]})
+
+    monkeypatch.setattr(ollama_helper, "_request_ollama_text", too_short)
+
+    cases, error = ollama_helper.generate_test_cases_with_ollama(
+        "SECRET_TEST_KEY",
+        "def solve(value):\n    return value\n",
+        definition,
+    )
+
+    assert cases == []
+    assert "expected 40" in error
 
 
 @pytest.mark.parametrize(

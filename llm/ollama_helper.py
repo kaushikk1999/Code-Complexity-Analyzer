@@ -16,6 +16,8 @@ from llm.ollama_errors import (
 )
 from optimization.planner import OptimizationPlan, OptimizedCodeCandidate
 from scoring.optimizer_score import ScoreBreakdown
+from utils.entrypoints import EntrypointDefinition
+from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT, GeneratedTestCase
 
 
 class OllamaHelperError(Exception):
@@ -26,8 +28,8 @@ class OllamaHelperError(Exception):
         self.category = category
 
 
-def _model_candidates() -> list[str]:
-    return model_candidates()
+def _model_candidates(preferred_model: str = "") -> list[str]:
+    return model_candidates(preferred_model)
 
 
 def _classify_ollama_error(exc: Exception) -> str:
@@ -62,7 +64,7 @@ def _generate_content(client: Any, model_name: str, prompt: str, json_mode: bool
     return _extract_message_text(client.chat(**request))
 
 
-def _request_ollama_text(api_key: str, prompt: str, *, json_mode: bool = False) -> str:
+def _request_ollama_text(api_key: str, prompt: str, *, json_mode: bool = False, model_name: str = "") -> str:
     # The API key is used only to construct this request-scoped client.
     api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
     if not api_key:
@@ -75,9 +77,9 @@ def _request_ollama_text(api_key: str, prompt: str, *, json_mode: bool = False) 
     client = Client(host=OLLAMA_HOST, headers={"Authorization": f"Bearer {api_key}"})
     last_model_error: Exception | None = None
 
-    for model_name in _model_candidates():
+    for candidate_model in _model_candidates(model_name):
         try:
-            return _generate_content(client, model_name, prompt, json_mode)
+            return _generate_content(client, candidate_model, prompt, json_mode)
         except Exception as exc:
             category = _classify_ollama_error(exc)
             if category == "model_unavailable":
@@ -94,6 +96,7 @@ def enhance_with_ollama(
     analysis: StaticAnalysisResult,
     score: ScoreBreakdown,
     plan: OptimizationPlan,
+    model_name: str = "",
 ) -> Optional[str]:
     """Return an optional Ollama-generated coaching summary.
 
@@ -141,7 +144,10 @@ Return concise Markdown with exactly these headings:
 ## Edge-Case Questions
 """
     try:
-        text = _request_ollama_text(api_key, prompt)
+        if model_name:
+            text = _request_ollama_text(api_key, prompt, model_name=model_name)
+        else:
+            text = _request_ollama_text(api_key, prompt)
     except OllamaHelperError as exc:
         return f"Ollama enhancement failed. {_ollama_error_message(exc.category)}"
     except Exception as exc:
@@ -174,6 +180,7 @@ def generate_optimized_code_with_ollama(
     level: str = "medium_refactor",
     retry_count: int = 0,
     rejection_reasons: Optional[list] = None,
+    model_name: str = "",
 ) -> tuple[Optional[OptimizedCodeCandidate], Optional[str]]:
     """Ask Ollama for one structured optimized-code candidate.
 
@@ -286,7 +293,10 @@ Original code:
 ```
 """
     try:
-        text = _request_ollama_text(api_key, prompt, json_mode=True)
+        if model_name:
+            text = _request_ollama_text(api_key, prompt, json_mode=True, model_name=model_name)
+        else:
+            text = _request_ollama_text(api_key, prompt, json_mode=True)
         payload = _extract_json_object(text)
     except OllamaHelperError as exc:
         return None, f"Ollama optimization generation failed. {_ollama_error_message(exc.category)}"
@@ -318,3 +328,88 @@ Original code:
         confidence=0.72,
         retry_count=retry_count,
     ), None
+
+
+def generate_test_cases_with_ollama(
+    api_key: str,
+    code: str,
+    definition: EntrypointDefinition,
+    model_name: str = "",
+    target_count: int = DEFAULT_BENCHMARK_CASE_COUNT,
+) -> tuple[list[GeneratedTestCase], str]:
+    """Ask Ollama for benchmark-ready cases for the selected entrypoint."""
+    api_key = (api_key or os.getenv("OLLAMA_API_KEY", "")).strip()
+    if not api_key:
+        return [], "Ollama API key was not provided."
+    signature = {
+        "entrypoint": definition.callable_name,
+        "args": definition.benchmark_args,
+        "required_positional_count": definition.required_positional_count,
+        "keyword_only_args": definition.keyword_only_args,
+        "required_keyword_only_args": definition.required_keyword_only_args,
+        "annotations": definition.annotations,
+    }
+    prompt = f"""
+Generate exactly {target_count} executable benchmark test cases for this Python entrypoint.
+Return JSON only with this exact shape:
+{{
+  "test_cases": [
+    {{"name": "short name", "input": {{"args": [], "kwargs": {{}}}}, "expected_output": ""}}
+  ]
+}}
+
+Entrypoint signature facts:
+```json
+{json.dumps(signature, indent=2)}
+```
+
+Rules:
+- Generate exactly {target_count} test cases.
+- Every input must be JSON-compatible.
+- Prefer kwargs matching the entrypoint argument names.
+- Cover empty, tiny, duplicate, negative, sorted, reverse-sorted, medium, and stress-style cases when relevant.
+- Do not include code fences or Markdown.
+
+Code:
+```python
+{code[:6000]}
+```
+"""
+    try:
+        if model_name:
+            text = _request_ollama_text(api_key, prompt, json_mode=True, model_name=model_name)
+        else:
+            text = _request_ollama_text(api_key, prompt, json_mode=True)
+        payload = _extract_json_object(text)
+    except OllamaHelperError as exc:
+        return [], _ollama_error_message(exc.category)
+    except Exception as exc:
+        return [], _ollama_error_message(_classify_ollama_error(exc))
+
+    raw_cases = payload.get("test_cases", [])
+    if not isinstance(raw_cases, list):
+        return [], "Ollama did not return a test_cases list."
+    cases: list[GeneratedTestCase] = []
+    for index, item in enumerate(raw_cases, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_input = item.get("input", {"args": [], "kwargs": {}})
+        if not isinstance(raw_input, dict):
+            raw_input = {"args": [raw_input], "kwargs": {}}
+        args = raw_input.get("args", [])
+        kwargs = raw_input.get("kwargs", {})
+        if not isinstance(args, list):
+            args = [args]
+        if not isinstance(kwargs, dict):
+            kwargs = {}
+        cases.append(
+            GeneratedTestCase(
+                name=str(item.get("name", f"LLM case {index}") or f"LLM case {index}"),
+                benchmark_input=json.dumps({"args": args, "kwargs": kwargs}, ensure_ascii=False),
+                expected_output=str(item.get("expected_output", item.get("expected", "")) or ""),
+                reason="Generated by the selected LLM model.",
+            )
+        )
+    if len(cases) != target_count:
+        return [], f"Ollama returned {len(cases)} valid test case(s), expected {target_count}."
+    return cases, ""

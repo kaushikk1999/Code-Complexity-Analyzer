@@ -8,6 +8,8 @@ from typing import Any, List
 
 from utils.entrypoints import EntrypointDefinition, find_entrypoint_definition
 
+DEFAULT_BENCHMARK_CASE_COUNT = 40
+
 
 @dataclass
 class GeneratedTestCase:
@@ -52,10 +54,116 @@ def build_benchmark_batch_input(cases: List[GeneratedTestCase]) -> str:
     return json.dumps({"cases": payload_cases}, ensure_ascii=False, indent=2)
 
 
+def _case_payload(case: GeneratedTestCase) -> dict | None:
+    try:
+        payload = json.loads(case.benchmark_input)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not any(key in payload for key in ("args", "kwargs", "stdin")):
+        return None
+    named_payload = dict(payload)
+    named_payload.setdefault("name", case.name)
+    return named_payload
+
+
+def benchmark_payload_case_count(input_text: str) -> int:
+    text = (input_text or "").strip()
+    if not text:
+        return 0
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return 1
+    if isinstance(value, dict) and isinstance(value.get("cases"), list):
+        return len(value["cases"])
+    if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+        return len(value)
+    return 1
+
+
+def merge_generated_and_custom_benchmark_input(cases: List[GeneratedTestCase], custom_input: str = "") -> str:
+    payload_cases = [payload for case in cases for payload in [_case_payload(case)] if payload is not None]
+    custom_text = (custom_input or "").strip()
+    if custom_text:
+        try:
+            custom_value = json.loads(custom_text)
+        except json.JSONDecodeError:
+            custom_value = custom_text
+        if isinstance(custom_value, dict) and isinstance(custom_value.get("cases"), list):
+            payload_cases.extend(item for item in custom_value["cases"] if isinstance(item, dict))
+        elif isinstance(custom_value, list) and custom_value and all(isinstance(item, dict) for item in custom_value):
+            payload_cases.extend(custom_value)
+        elif isinstance(custom_value, dict):
+            payload_cases.append(custom_value)
+        else:
+            payload_cases.append({"args": [custom_value], "name": "Custom input"})
+    if not payload_cases:
+        return ""
+    return json.dumps({"cases": payload_cases}, ensure_ascii=False, indent=2)
+
+
+def _number_for_arg(arg: str, index: int) -> int:
+    lowered = arg.lower()
+    if "dict" in lowered:
+        return ["a", "aa", "aaa", "b"][: max(1, (index % 4) + 1)]
+    if any(token in lowered for token in ("target", "sum", "val", "k", "n", "x")):
+        return index
+    return index
+
+
+def _list_case(arg: str, index: int) -> Any:
+    variants = [
+        [],
+        [1],
+        [1, 2, 3],
+        [3, 2, 1],
+        [1, 2, 2, 3],
+        [-3, -1, 0, 2],
+        list(range(index % 12)),
+        [index, index + 1, index + 2],
+    ]
+    lowered = arg.lower()
+    if any(token in lowered for token in ("s", "text", "string", "word")) and "num" not in lowered:
+        return "".join(chr(97 + ((index + offset) % 26)) for offset in range(max(1, index % 10)))
+    return variants[index % len(variants)]
+
+
+def _fallback_cases_for_args(args: List[str], target_count: int) -> List[GeneratedTestCase]:
+    cases: List[GeneratedTestCase] = []
+    for index in range(target_count):
+        kwargs = {}
+        for arg_index, arg in enumerate(args):
+            if arg_index == 0:
+                kwargs[arg] = _list_case(arg, index)
+            else:
+                kwargs[arg] = _number_for_arg(arg, index + arg_index)
+        cases.append(
+            GeneratedTestCase(
+                name=f"Generated coverage case {index + 1}",
+                benchmark_input=_json_kwargs(**kwargs),
+                reason="Deterministic local fallback case for mandatory benchmark coverage.",
+            )
+        )
+    return cases
+
+
+def _pad_cases(cases: List[GeneratedTestCase], args: List[str], target_count: int) -> List[GeneratedTestCase]:
+    if len(cases) >= target_count:
+        return cases[:target_count]
+    padded = list(cases)
+    fallback = _fallback_cases_for_args(args, target_count)
+    for case in fallback:
+        if len(padded) >= target_count:
+            break
+        padded.append(case)
+    return padded[:target_count]
+
+
 def generate_test_cases(
     code: str,
     entrypoint: str,
     definitions: List[EntrypointDefinition],
+    target_count: int = DEFAULT_BENCHMARK_CASE_COUNT,
 ) -> List[GeneratedTestCase]:
     definition = find_entrypoint_definition(definitions, entrypoint)
     if not definition:
@@ -65,7 +173,7 @@ def generate_test_cases(
     args = _args_for_entrypoint(definition)
 
     if name == "wordbreak" and args[:2] == ["s", "wordDict"]:
-        return [
+        return _pad_cases([
             GeneratedTestCase(
                 name="Basic positive segmentation",
                 benchmark_input=_json_kwargs(s="leetcode", wordDict=["leet", "code"]),
@@ -96,32 +204,32 @@ def generate_test_cases(
                 expected_output="True",
                 reason="Checks overlapping word lengths and DP transitions.",
             ),
-        ]
+        ], args, target_count)
 
     if len(args) == 1:
         arg = args[0]
-        return [
+        return _pad_cases([
             GeneratedTestCase("Empty list", _json_kwargs(**{arg: []}), reason="Checks empty input."),
             GeneratedTestCase("Single item", _json_kwargs(**{arg: [1]}), reason="Checks smallest non-empty input."),
             GeneratedTestCase("Small sorted list", _json_kwargs(**{arg: [1, 2, 3]}), reason="Checks sorted input."),
             GeneratedTestCase("Duplicates", _json_kwargs(**{arg: [1, 2, 2, 3]}), reason="Checks duplicate values."),
             GeneratedTestCase("Negative values", _json_kwargs(**{arg: [-3, -1, 0, 2]}), reason="Checks negative values."),
-        ]
+        ], args, target_count)
 
     if len(args) == 2:
         first, second = args
-        return [
+        return _pad_cases([
             GeneratedTestCase("Small positive case", _json_kwargs(**{first: [1, 2, 3], second: 3})),
             GeneratedTestCase("Empty first input", _json_kwargs(**{first: [], second: 0})),
             GeneratedTestCase("Single item", _json_kwargs(**{first: [1], second: 1})),
             GeneratedTestCase("Duplicates", _json_kwargs(**{first: [2, 2, 3], second: 4})),
             GeneratedTestCase("Negative values", _json_kwargs(**{first: [-1, 0, 1], second: 0})),
-        ]
+        ], args, target_count)
 
-    return [
+    return _pad_cases([
         GeneratedTestCase(
             name="Default generated case",
             benchmark_input=json.dumps({"args": []}),
             reason="Could not infer a specific input shape.",
         )
-    ]
+    ], args, target_count)
