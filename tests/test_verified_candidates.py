@@ -109,13 +109,21 @@ def solve(values):
             expected_space="O(1)",
         )
 
-    def fake_benchmark(original_code, candidate_code, entrypoint, benchmark_input, repeat_count=5, timeout_seconds=5.0):
+    def fake_run_benchmark(
+        code,
+        entrypoint,
+        input_text,
+        repeat_count=5,
+        warmup_count=1,
+        timeout_seconds=5.0,
+        allow_top_level=False,
+    ):
         runtimes = {"quick_win": 5.0, "medium_refactor": 2.0, "advanced": 7.0}
-        matched = next(level for level in runtimes if level in candidate_code)
-        return _benchmark(10.0, 2.0), _benchmark(runtimes[matched], 2.0)
+        matched = next((level for level in runtimes if level in code), "")
+        return _benchmark(runtimes.get(matched, 10.0), 2.0)
 
     monkeypatch.setattr("optimization.planner.build_local_candidate_for_level", fake_local_candidate)
-    monkeypatch.setattr("optimization.planner.benchmark_candidate", fake_benchmark)
+    monkeypatch.setattr("optimization.planner.run_benchmark", fake_run_benchmark)
 
     plan = generate_verified_optimization_candidates(
         original_code=code,
@@ -128,6 +136,56 @@ def solve(values):
     assert plan.best_candidate
     assert plan.best_candidate.level == "medium_refactor"
     assert plan.optimized_code == plan.best_candidate.code
+
+
+def test_original_benchmark_is_reused_for_candidate_verification(monkeypatch):
+    code = """
+def solve(values):
+    total = 0
+    for value in values:
+        total += value
+    return total
+"""
+    analysis = analyze_code(code)
+    score = calculate_optimization_score(analysis)
+    calls = []
+
+    def fake_local_candidate(original_code, original_analysis, entrypoint, level):
+        return OptimizedCodeCandidate(
+            source="local",
+            code=f"def solve(values):\n    # {level}\n    return sum(values)\n",
+            level=level,
+            title=level,
+            explanation="Fake candidate",
+            expected_time="O(n)",
+            expected_space="O(1)",
+        )
+
+    def fake_run_benchmark(
+        code,
+        entrypoint,
+        input_text,
+        repeat_count=5,
+        warmup_count=1,
+        timeout_seconds=5.0,
+        allow_top_level=False,
+    ):
+        calls.append(code)
+        return _benchmark(1.0, 2.0)
+
+    monkeypatch.setattr("optimization.planner.build_local_candidate_for_level", fake_local_candidate)
+    monkeypatch.setattr("optimization.planner.run_benchmark", fake_run_benchmark)
+
+    generate_verified_optimization_candidates(
+        original_code=code,
+        analysis=analysis,
+        score=score,
+        entrypoint="solve",
+        benchmark_input='{"args": [[1, 2, 3]]}',
+    )
+
+    assert calls.count(code) == 1
+    assert len(calls) == 4
 
 
 def test_no_candidate_claims_impossible_lower_output_complexity():

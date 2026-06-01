@@ -38,6 +38,11 @@ class Solution:
         )
 """
 
+PASSWORD_CODE = """
+def strongPasswordChecker(password: str) -> int:
+    return len(password)
+"""
+
 
 def test_generates_word_break_cases():
     definitions = discover_entrypoints(WORD_BREAK_CODE)
@@ -92,6 +97,27 @@ def test_sorted_array_to_bst_generated_batch_supplies_nums():
     )
     assert result.success, result.error
     assert result.input_description == "40 benchmark case(s)"
+
+
+def test_string_annotation_generated_batch_supplies_strings():
+    definitions = discover_entrypoints(PASSWORD_CODE)
+    cases = generate_test_cases(
+        code=PASSWORD_CODE,
+        entrypoint="strongPasswordChecker",
+        definitions=definitions,
+    )
+    benchmark_input = build_benchmark_batch_input(cases)
+    payload = json.loads(benchmark_input)
+
+    assert all(isinstance(case.get("kwargs", {}).get("password"), str) for case in payload["cases"])
+
+    result = run_benchmark(
+        PASSWORD_CODE,
+        entrypoint="strongPasswordChecker",
+        input_text=benchmark_input,
+        repeat_count=1,
+    )
+    assert result.success, result.error
 
 
 def test_custom_single_case_appends_to_mandatory_generated_cases():

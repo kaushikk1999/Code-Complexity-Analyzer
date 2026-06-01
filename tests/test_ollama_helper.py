@@ -66,7 +66,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. DeepSeek-V4-Flash may require a subscription; the app will try qwen3-coder-next:cloud as a fallback.",
+            "Ollama Cloud request failed for the selected model. The app will try deepseek-v4-pro:cloud and qwen3-coder-next:cloud as fallbacks.",
         ),
     ],
 )
@@ -177,7 +177,7 @@ def test_ollama_helper_uses_deepseek_flash_first(monkeypatch):
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls == ["deepseek-v4-flash:cloud"]
+    assert calls == ["deepseek-v4-pro:cloud"]
 
 
 def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(monkeypatch):
@@ -194,7 +194,7 @@ def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(mon
 
     def fake_generate_content(client, model_name: str, prompt: str, json_mode=False):
         calls.append(model_name)
-        if model_name == "deepseek-v4-flash:cloud":
+        if model_name == "deepseek-v4-pro:cloud":
             raise RuntimeError("this model requires a subscription (status code: 403)")
         return '{"ok": true}'
 
@@ -203,7 +203,7 @@ def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(mon
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
+    assert calls == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
 
 
 def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
@@ -211,7 +211,7 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates == ["deepseek-v4-flash:cloud", "qwen3-coder-next:cloud"]
+    assert candidates == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
 
 
 def test_visible_ollama_model_options_are_restricted_to_approved_models():
@@ -224,7 +224,7 @@ def test_visible_ollama_model_options_are_restricted_to_approved_models():
         "Gemma 4": "gemma4:cloud",
         "Nemotron 3 Super": "nemotron-3-super:cloud",
         "Qwen 3.5": "qwen3.5:cloud",
-        "GPT OSS 120B": "gpt-oss:120b",
+        "GPT OSS 120B": "gpt-oss:120b-cloud",
     }
 
     assert ollama_errors.OLLAMA_MODEL_OPTIONS == expected

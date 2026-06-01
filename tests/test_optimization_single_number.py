@@ -15,10 +15,20 @@ def test_single_number_generates_clean_reference_candidate(monkeypatch):
             summary=summarize_runs(runs),
         )
 
-    def fake_benchmark_candidate(*args, **kwargs):
-        return fake_result(1.0), fake_result(0.9)
+    def fake_run_benchmark(
+        code,
+        entrypoint,
+        input_text,
+        repeat_count=5,
+        warmup_count=1,
+        timeout_seconds=5.0,
+        allow_top_level=False,
+    ):
+        if "result ^= num" in code:
+            return fake_result(0.9)
+        return fake_result(1.0)
 
-    monkeypatch.setattr("optimization.planner.benchmark_candidate", fake_benchmark_candidate)
+    monkeypatch.setattr("optimization.planner.run_benchmark", fake_run_benchmark)
 
     code = """
 class Solution:

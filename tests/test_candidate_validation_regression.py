@@ -82,10 +82,20 @@ def test_candidate_benchmark_must_not_be_slower(monkeypatch):
             summary=summarize_runs(runs),
         )
 
-    def fake_benchmark_candidate(*args, **kwargs):
-        return fake_result(1.0), fake_result(1.2)
+    def fake_run_benchmark(
+        code,
+        entrypoint,
+        input_text,
+        repeat_count=5,
+        warmup_count=1,
+        timeout_seconds=5.0,
+        allow_top_level=False,
+    ):
+        if "acc = 0" in code:
+            return fake_result(1.2)
+        return fake_result(1.0)
 
-    monkeypatch.setattr(planner, "benchmark_candidate", fake_benchmark_candidate)
+    monkeypatch.setattr(planner, "run_benchmark", fake_run_benchmark)
 
     code = "def total(values):\n    result = 0\n    for value in values:\n        result += value\n    return result\n"
     analysis = analyze_code(code)

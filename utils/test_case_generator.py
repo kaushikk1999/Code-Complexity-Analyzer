@@ -31,6 +31,22 @@ def _json_kwargs(**kwargs: Any) -> str:
     return json.dumps({"kwargs": kwargs}, ensure_ascii=False)
 
 
+def _annotation_for_arg(definition: EntrypointDefinition, arg: str) -> str:
+    return (definition.annotations.get(arg, "") or "").lower()
+
+
+def _arg_expects_string(definition: EntrypointDefinition, arg: str) -> bool:
+    lowered = arg.lower()
+    annotation = _annotation_for_arg(definition, arg)
+    return annotation == "str" or any(token in lowered for token in ("password", "text", "string", "word"))
+
+
+def _arg_expects_sequence(definition: EntrypointDefinition, arg: str) -> bool:
+    annotation = _annotation_for_arg(definition, arg)
+    lowered = arg.lower()
+    return annotation in {"list", "sequence"} or any(token in lowered for token in ("nums", "arr", "array", "list"))
+
+
 def build_benchmark_batch_input(cases: List[GeneratedTestCase]) -> str:
     if not cases:
         return ""
@@ -128,13 +144,20 @@ def _list_case(arg: str, index: int) -> Any:
     return variants[index % len(variants)]
 
 
-def _fallback_cases_for_args(args: List[str], target_count: int) -> List[GeneratedTestCase]:
+def _fallback_cases_for_args(
+    args: List[str],
+    target_count: int,
+    definition: EntrypointDefinition | None = None,
+) -> List[GeneratedTestCase]:
     cases: List[GeneratedTestCase] = []
     for index in range(target_count):
         kwargs = {}
         for arg_index, arg in enumerate(args):
             if arg_index == 0:
-                kwargs[arg] = _list_case(arg, index)
+                if definition and _arg_expects_string(definition, arg) and not _arg_expects_sequence(definition, arg):
+                    kwargs[arg] = _string_case(arg, index)
+                else:
+                    kwargs[arg] = _list_case(arg, index)
             else:
                 kwargs[arg] = _number_for_arg(arg, index + arg_index)
         cases.append(
@@ -147,11 +170,25 @@ def _fallback_cases_for_args(args: List[str], target_count: int) -> List[Generat
     return cases
 
 
-def _pad_cases(cases: List[GeneratedTestCase], args: List[str], target_count: int) -> List[GeneratedTestCase]:
+def _string_case(arg: str, index: int) -> str:
+    lowered = arg.lower()
+    if "password" in lowered:
+        variants = ["", "a", "abcdef", "Abcdef1", "Abcdef1!", "P@ssw0rd123"]
+    else:
+        variants = ["", "a", "abc", "leetcode", "catsandog", "hello world"]
+    return variants[index % len(variants)]
+
+
+def _pad_cases(
+    cases: List[GeneratedTestCase],
+    args: List[str],
+    target_count: int,
+    definition: EntrypointDefinition | None = None,
+) -> List[GeneratedTestCase]:
     if len(cases) >= target_count:
         return cases[:target_count]
     padded = list(cases)
-    fallback = _fallback_cases_for_args(args, target_count)
+    fallback = _fallback_cases_for_args(args, target_count, definition)
     for case in fallback:
         if len(padded) >= target_count:
             break
@@ -204,17 +241,25 @@ def generate_test_cases(
                 expected_output="True",
                 reason="Checks overlapping word lengths and DP transitions.",
             ),
-        ], args, target_count)
+        ], args, target_count, definition)
 
     if len(args) == 1:
         arg = args[0]
+        if _arg_expects_string(definition, arg) and not _arg_expects_sequence(definition, arg):
+            return _pad_cases([
+                GeneratedTestCase("Empty string", _json_kwargs(**{arg: ""}), reason="Checks empty text input."),
+                GeneratedTestCase("Single character", _json_kwargs(**{arg: "a"}), reason="Checks smallest non-empty text input."),
+                GeneratedTestCase("Short lowercase text", _json_kwargs(**{arg: "abcdef"}), reason="Checks typical text input."),
+                GeneratedTestCase("Mixed characters", _json_kwargs(**{arg: "Abcdef1!"}), reason="Checks mixed text characters."),
+                GeneratedTestCase("Longer text", _json_kwargs(**{arg: "P@ssw0rd123"}), reason="Checks a longer string input."),
+            ], args, target_count, definition)
         return _pad_cases([
             GeneratedTestCase("Empty list", _json_kwargs(**{arg: []}), reason="Checks empty input."),
             GeneratedTestCase("Single item", _json_kwargs(**{arg: [1]}), reason="Checks smallest non-empty input."),
             GeneratedTestCase("Small sorted list", _json_kwargs(**{arg: [1, 2, 3]}), reason="Checks sorted input."),
             GeneratedTestCase("Duplicates", _json_kwargs(**{arg: [1, 2, 2, 3]}), reason="Checks duplicate values."),
             GeneratedTestCase("Negative values", _json_kwargs(**{arg: [-3, -1, 0, 2]}), reason="Checks negative values."),
-        ], args, target_count)
+        ], args, target_count, definition)
 
     if len(args) == 2:
         first, second = args
@@ -224,7 +269,7 @@ def generate_test_cases(
             GeneratedTestCase("Single item", _json_kwargs(**{first: [1], second: 1})),
             GeneratedTestCase("Duplicates", _json_kwargs(**{first: [2, 2, 3], second: 4})),
             GeneratedTestCase("Negative values", _json_kwargs(**{first: [-1, 0, 1], second: 0})),
-        ], args, target_count)
+        ], args, target_count, definition)
 
     return _pad_cases([
         GeneratedTestCase(
@@ -232,4 +277,4 @@ def generate_test_cases(
             benchmark_input=json.dumps({"args": []}),
             reason="Could not infer a specific input shape.",
         )
-    ], args, target_count)
+    ], args, target_count, definition)

@@ -1096,6 +1096,7 @@ def _verify_candidate_for_level(
     level: str,
     repeat_count: int = 5,
     timeout_seconds: float = 5.0,
+    original_benchmark: Optional[BenchmarkResult] = None,
 ) -> VerifiedOptimizationCandidate:
     if not candidate or not (candidate.code or "").strip():
         return _empty_verified_candidate(level, f"No {LEVEL_LABELS[level].lower()} candidate was generated.")
@@ -1141,13 +1142,24 @@ def _verify_candidate_for_level(
         verified.rejection_reasons.append("Candidate rejected because no benchmark input was provided for same-input validation.")
         return verified
 
-    original_benchmark, candidate_benchmark = benchmark_candidate(
-        original_code=original_code,
-        candidate_code=normalized_code,
+    if original_benchmark is None:
+        original_benchmark = run_benchmark(
+            code=original_code,
+            entrypoint=entrypoint,
+            input_text=benchmark_input,
+            repeat_count=repeat_count,
+            warmup_count=1,
+            timeout_seconds=timeout_seconds,
+            allow_top_level=False,
+        )
+    candidate_benchmark = run_benchmark(
+        code=normalized_code,
         entrypoint=entrypoint,
-        benchmark_input=benchmark_input,
+        input_text=benchmark_input,
         repeat_count=repeat_count,
+        warmup_count=1,
         timeout_seconds=timeout_seconds,
+        allow_top_level=False,
     )
     if not original_benchmark.success:
         verified.rejection_reasons.append(f"Candidate rejected because original benchmark failed: {original_benchmark.error}")
@@ -1243,6 +1255,17 @@ def generate_verified_optimization_candidates(
     generation_notes: List[str] = []
     rejection_context: List[str] = []
     used_provider = bool(api_key and candidate_provider)
+    original_benchmark: Optional[BenchmarkResult] = None
+    if benchmark_input.strip():
+        original_benchmark = run_benchmark(
+            code=original_code,
+            entrypoint=entrypoint,
+            input_text=benchmark_input,
+            repeat_count=repeat_count,
+            warmup_count=1,
+            timeout_seconds=timeout_seconds,
+            allow_top_level=False,
+        )
 
     for level in ("quick_win", "medium_refactor", "advanced"):
         generated = seed_candidates.get(level)
@@ -1255,7 +1278,7 @@ def generate_verified_optimization_candidates(
         if generated is None:
             generated = build_local_candidate_for_level(original_code, analysis, entrypoint, level)
             if used_provider and generated is not None:
-                generation_notes.append("Ollama candidate generation failed. Falling back to local verified optimizer.")
+                generation_notes.append(f"Using local verified optimizer fallback for {LEVEL_LABELS[level].lower()}.")
 
         verified = _verify_candidate_for_level(
             original_code=original_code,
@@ -1267,6 +1290,7 @@ def generate_verified_optimization_candidates(
             level=level,
             repeat_count=repeat_count,
             timeout_seconds=timeout_seconds,
+            original_benchmark=original_benchmark,
         )
         verified_candidates.append(verified)
         if verified.rejection_reasons:

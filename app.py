@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
@@ -46,12 +48,13 @@ from utils.constants import (
     HISTORY_LIMIT,
     MAX_CODE_CHARS,
 )
-from utils.entrypoints import choose_entrypoint, discover_entrypoints, find_entrypoint_definition
+from utils.entrypoints import EntrypointDefinition, discover_entrypoints, find_entrypoint_definition
 from utils.examples import EXAMPLES, get_example
 from utils.history_store import load_recent_records, progress_summary, save_analysis_record
 from utils.report_export import build_html_report, build_linkedin_summary, build_markdown_report
 from utils.test_case_generator import (
     DEFAULT_BENCHMARK_CASE_COUNT,
+    GeneratedTestCase,
     benchmark_payload_case_count,
     generate_test_cases,
     merge_generated_and_custom_benchmark_input,
@@ -86,12 +89,54 @@ LLM_MODEL_HELP = {
     "GPT OSS 120B": "Large open-weight GPT OSS model.",
 }
 
+
 st.set_page_config(
     page_title=APP_NAME,
     page_icon="🧪",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+@dataclass(frozen=True)
+class AnalysisContext:
+    code: str
+    code_hash: str
+    definitions: List[EntrypointDefinition]
+    entrypoint_options: List[str]
+    selected_entrypoint: str
+    generated_cases: List[GeneratedTestCase]
+    benchmark_input: str
+
+
+def _code_hash(code: str) -> str:
+    return hashlib.sha256((code or "").encode("utf-8")).hexdigest()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_analyze_code(code_hash: str, code: str) -> StaticAnalysisResult:
+    return analyze_code(code)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_discover_entrypoints(code_hash: str, code: str) -> List[EntrypointDefinition]:
+    return discover_entrypoints(code)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_local_test_cases(
+    code_hash: str,
+    code: str,
+    entrypoint: str,
+    target_count: int,
+) -> List[GeneratedTestCase]:
+    definitions = _cached_discover_entrypoints(code_hash, code)
+    return generate_test_cases(
+        code=code,
+        entrypoint=entrypoint,
+        definitions=definitions,
+        target_count=target_count,
+    )
 
 
 def _rerun() -> None:
@@ -122,7 +167,7 @@ def _initialize_state() -> None:
         "code_analyzer_plan_submit_pending": False,
         "benchmark_input_widget_version": 0,
         "ollama_api_key": "",
-        "selected_llm_model": "DeepSeek V4 Flash",
+        "selected_llm_model": "DeepSeek V4 Pro",
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
@@ -133,6 +178,8 @@ def _initialize_state() -> None:
         "generated_test_cases": [],
         "generated_test_case_source": "local",
         "generated_test_case_note": "",
+        "generated_test_case_cache_key": "",
+        "ollama_candidate_cache": {},
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -151,19 +198,29 @@ def _clear_outputs() -> None:
     st.session_state.generated_test_cases = []
     st.session_state.generated_test_case_source = "local"
     st.session_state.generated_test_case_note = ""
+    st.session_state.generated_test_case_cache_key = ""
+    st.session_state.ollama_candidate_cache = {}
 
 
 def _queue_ollama_submit(flag_key: str) -> None:
     st.session_state[flag_key] = True
 
 
+def _streamlit_ollama_secret() -> str:
+    try:
+        return str(st.secrets.get("OLLAMA_API_KEY", "") or "").strip()
+    except Exception:
+        return ""
+
+
 def _resolve_ollama_key_for_action(source: str, fallback_key: str = "") -> Optional[str]:
-    api_key = str(fallback_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
+    api_key = str(fallback_key or _streamlit_ollama_secret() or os.getenv("OLLAMA_API_KEY", "") or "").strip()
     if api_key:
+        os.environ["OLLAMA_API_KEY"] = api_key
         return api_key
 
     st.warning(
-        "Ollama API key is not configured. Add OLLAMA_API_KEY to the local .env file to enable LLM-powered "
+        "Ollama API key is not configured. Add OLLAMA_API_KEY to .streamlit/secrets.toml or the local .env file to enable LLM-powered "
         "optimization and test-case generation. Complexity Lab will use local deterministic fallbacks for this run."
     )
     return ""
@@ -180,6 +237,26 @@ def _validation_benchmark_input() -> str:
         st.session_state.get("generated_test_cases", []),
         str(st.session_state.get("benchmark_input", "") or ""),
     )
+
+
+def _choose_entrypoint_from_definitions(
+    definitions: List[EntrypointDefinition],
+    current_entrypoint: str = "",
+) -> str:
+    current = (current_entrypoint or "").strip()
+    if not definitions:
+        return current
+    current_definition = find_entrypoint_definition(definitions, current)
+    if current_definition:
+        return current_definition.callable_name
+    if len(definitions) == 1:
+        return definitions[0].callable_name
+    for preferred in ("main", "solve", "solution"):
+        preferred_definition = find_entrypoint_definition(definitions, preferred)
+        if preferred_definition:
+            return preferred_definition.callable_name
+    top_level = [definition for definition in definitions if not definition.is_method]
+    return (top_level[0] if top_level else definitions[0]).callable_name
 
 
 def _has_mandatory_benchmark_baseline(benchmark: Optional[BenchmarkResult]) -> bool:
@@ -218,9 +295,30 @@ def _autofill_benchmark_input_from_generated_cases(force: bool = False) -> None:
         _set_benchmark_input("" if not current_input or force else current_input, current_entrypoint)
 
 
-def _resolve_generated_test_cases(code: str, definitions, api_key: str = "") -> None:
+def _resolve_generated_test_cases(
+    code: str,
+    definitions: List[EntrypointDefinition],
+    api_key: str = "",
+    code_hash: str = "",
+) -> None:
+    code_hash = code_hash or _code_hash(code)
     definition = find_entrypoint_definition(definitions, st.session_state.entrypoint)
     llm_key = str(api_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
+    cache_key = "|".join(
+        [
+            code_hash,
+            st.session_state.entrypoint,
+            _selected_ollama_model() if llm_key else "local",
+            "llm" if definition and llm_key else "local",
+            str(DEFAULT_BENCHMARK_CASE_COUNT),
+        ]
+    )
+    if (
+        st.session_state.get("generated_test_case_cache_key") == cache_key
+        and st.session_state.get("generated_test_cases")
+    ):
+        return
+
     if definition and llm_key:
         llm_cases, llm_error = generate_test_cases_with_ollama(
             api_key=llm_key,
@@ -233,28 +331,59 @@ def _resolve_generated_test_cases(code: str, definitions, api_key: str = "") -> 
             st.session_state.generated_test_cases = llm_cases
             st.session_state.generated_test_case_source = "llm"
             st.session_state.generated_test_case_note = ""
+            st.session_state.generated_test_case_cache_key = cache_key
             return
         st.session_state.generated_test_case_note = llm_error or "LLM did not return the required 40 cases."
     else:
         st.session_state.generated_test_case_note = "Using local fallback cases because no Ollama API key is configured."
 
-    st.session_state.generated_test_cases = generate_test_cases(
-        code=code,
-        entrypoint=st.session_state.entrypoint,
-        definitions=definitions,
-        target_count=DEFAULT_BENCHMARK_CASE_COUNT,
+    st.session_state.generated_test_cases = _cached_local_test_cases(
+        code_hash,
+        code,
+        st.session_state.entrypoint,
+        DEFAULT_BENCHMARK_CASE_COUNT,
     )
     st.session_state.generated_test_case_source = "local"
+    st.session_state.generated_test_case_cache_key = "|".join(
+        [code_hash, st.session_state.entrypoint, "local", "local", str(DEFAULT_BENCHMARK_CASE_COUNT)]
+    )
 
 
 def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
     code = str(st.session_state.get("editor_code", "") or "")
-    definitions = discover_entrypoints(code)
+    code_hash = _code_hash(code)
+    definitions = _cached_discover_entrypoints(code_hash, code)
     if definitions and update_state:
-        selected = choose_entrypoint(code, st.session_state.get("entrypoint", ""))
+        selected = _choose_entrypoint_from_definitions(definitions, st.session_state.get("entrypoint", ""))
         if st.session_state.get("entrypoint") != selected:
             st.session_state.entrypoint = selected
     return [definition.callable_name for definition in definitions]
+
+
+def _analysis_context(api_key: str = "", autofill_benchmark_input: bool = False) -> Optional[AnalysisContext]:
+    code = str(st.session_state.get("editor_code", "") or "")
+    if len(code) > MAX_CODE_CHARS:
+        st.error(f"Code is too large for this app demo. Limit: {MAX_CODE_CHARS:,} characters.")
+        return None
+    code_hash = _code_hash(code)
+    definitions = _cached_discover_entrypoints(code_hash, code)
+    if definitions:
+        selected = _choose_entrypoint_from_definitions(definitions, st.session_state.get("entrypoint", ""))
+        if st.session_state.get("entrypoint") != selected:
+            st.session_state.entrypoint = selected
+    _resolve_generated_test_cases(code, definitions, api_key=api_key, code_hash=code_hash)
+    _refresh_benchmark_input_for_entrypoint()
+    if autofill_benchmark_input:
+        _autofill_benchmark_input_from_generated_cases()
+    return AnalysisContext(
+        code=code,
+        code_hash=code_hash,
+        definitions=definitions,
+        entrypoint_options=[definition.callable_name for definition in definitions],
+        selected_entrypoint=str(st.session_state.get("entrypoint", "") or ""),
+        generated_cases=list(st.session_state.get("generated_test_cases", [])),
+        benchmark_input=_validation_benchmark_input(),
+    )
 
 
 def _analyze_current(
@@ -265,24 +394,17 @@ def _analyze_current(
     api_key: str = "",
     autofill_benchmark_input: bool = False,
 ) -> None:
-    code = st.session_state.editor_code
-    _sync_entrypoint_with_code(update_state=True)
-    if len(code) > MAX_CODE_CHARS:
-        st.error(f"Code is too large for this app demo. Limit: {MAX_CODE_CHARS:,} characters.")
+    context = _analysis_context(api_key=api_key, autofill_benchmark_input=autofill_benchmark_input)
+    if not context:
         return
-    analysis = analyze_code(code)
+    analysis = _cached_analyze_code(context.code_hash, context.code)
     score = calculate_optimization_score(analysis, benchmark)
-    definitions = discover_entrypoints(code)
-    _resolve_generated_test_cases(code, definitions, api_key=api_key)
-    _refresh_benchmark_input_for_entrypoint()
-    if autofill_benchmark_input:
-        _autofill_benchmark_input_from_generated_cases()
     plan = build_optimization_plan(
         analysis,
         score,
-        entrypoint=st.session_state.entrypoint,
+        entrypoint=context.selected_entrypoint,
         prior_rejection_reasons=prior_rejection_reasons,
-        benchmark_input=_validation_benchmark_input(),
+        benchmark_input=context.benchmark_input,
         generate_candidates=generate_candidates,
         candidate_provider=candidate_provider,
         api_key=api_key,
@@ -297,27 +419,23 @@ def _run_benchmark() -> Optional[BenchmarkResult]:
         st.warning("Static-only mode is enabled, so benchmark execution is disabled.")
         return None
     settings = profile_settings(st.session_state.benchmark_profile)
-    code = st.session_state.editor_code
-    _sync_entrypoint_with_code(update_state=True)
-    definitions = discover_entrypoints(code)
-    _resolve_generated_test_cases(code, definitions)
-    _refresh_benchmark_input_for_entrypoint()
-    _autofill_benchmark_input_from_generated_cases()
-    benchmark_input = _validation_benchmark_input()
+    context = _analysis_context(autofill_benchmark_input=True)
+    if not context:
+        return None
     if st.session_state.docker_backend:
         benchmark = run_benchmark_in_docker(
-            code=code,
-            entrypoint=st.session_state.entrypoint,
-            input_text=benchmark_input,
+            code=context.code,
+            entrypoint=context.selected_entrypoint,
+            input_text=context.benchmark_input,
             repeat_count=st.session_state.repeat_count or settings["repeat_count"],
             warmup_count=settings["warmup_count"],
             timeout_seconds=st.session_state.timeout_seconds or settings["timeout_seconds"],
         )
     else:
         benchmark = run_benchmark(
-            code=code,
-            entrypoint=st.session_state.entrypoint,
-            input_text=benchmark_input,
+            code=context.code,
+            entrypoint=context.selected_entrypoint,
+            input_text=context.benchmark_input,
             repeat_count=st.session_state.repeat_count or settings["repeat_count"],
             warmup_count=settings["warmup_count"],
             timeout_seconds=st.session_state.timeout_seconds or settings["timeout_seconds"],
@@ -344,20 +462,18 @@ def _run_scaling() -> None:
         st.warning("Static-only mode is enabled, so scaling benchmarks are disabled.")
         return
     settings = profile_settings(st.session_state.benchmark_profile)
-    _sync_entrypoint_with_code(update_state=True)
-    definitions = discover_entrypoints(st.session_state.editor_code)
-    _resolve_generated_test_cases(st.session_state.editor_code, definitions)
-    _refresh_benchmark_input_for_entrypoint()
-    _autofill_benchmark_input_from_generated_cases()
+    context = _analysis_context(autofill_benchmark_input=True)
+    if not context:
+        return
     sizes = st.session_state.scaling_sizes
     if isinstance(sizes, str):
         parsed_sizes = [int(item.strip()) for item in sizes.split(",") if item.strip().isdigit()]
     else:
         parsed_sizes = list(settings["sizes"])
     scaling = run_scaling_benchmark(
-        code=st.session_state.editor_code,
-        entrypoint=st.session_state.entrypoint,
-        input_text=_validation_benchmark_input(),
+        code=context.code,
+        entrypoint=context.selected_entrypoint,
+        input_text=context.benchmark_input,
         data_shape=st.session_state.scaling_shape,
         sizes=parsed_sizes or settings["sizes"],
         repeat_count=max(1, min(st.session_state.repeat_count, 10)),
@@ -396,29 +512,47 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     seed_plan = st.session_state.plan
     if not analysis or not score or not seed_plan:
         return
+    context = _analysis_context(api_key=api_key)
+    if not context:
+        return
 
     candidate_provider = None
     if api_key:
         def candidate_provider(level: str, rejection_reasons: List[str]):
-            return generate_optimized_code_with_ollama(
+            rejection_hash = hashlib.sha256("\n".join(rejection_reasons).encode("utf-8")).hexdigest()
+            cache_key = "|".join(
+                [
+                    _selected_ollama_model(),
+                    context.code_hash,
+                    context.selected_entrypoint,
+                    level,
+                    rejection_hash,
+                ]
+            )
+            candidate_cache = st.session_state.setdefault("ollama_candidate_cache", {})
+            if cache_key in candidate_cache:
+                return candidate_cache[cache_key]
+            result = generate_optimized_code_with_ollama(
                 api_key=api_key,
-                code=st.session_state.editor_code,
+                code=context.code,
                 analysis=analysis,
                 score=score,
                 plan=seed_plan,
-                entrypoint=st.session_state.entrypoint,
+                entrypoint=context.selected_entrypoint,
                 level=level,
                 retry_count=0,
                 rejection_reasons=rejection_reasons,
                 model_name=_selected_ollama_model(),
             )
+            candidate_cache[cache_key] = result
+            return result
 
     plan = generate_verified_optimization_candidates(
-        original_code=st.session_state.editor_code,
+        original_code=context.code,
         analysis=analysis,
         score=score,
-        entrypoint=st.session_state.entrypoint,
-        benchmark_input=_validation_benchmark_input(),
+        entrypoint=context.selected_entrypoint,
+        benchmark_input=context.benchmark_input,
         api_key=api_key,
         plan=seed_plan,
         candidate_provider=candidate_provider,
@@ -428,7 +562,8 @@ def _build_verified_optimization_plan(api_key: str) -> None:
     st.session_state.plan = plan
 
     if plan.generation_notes:
-        st.warning("Ollama candidate generation failed. Falling back to local verified optimizer.")
+        warning_lines = "\n".join(f"- {note}" for note in plan.generation_notes)
+        st.warning(f"Ollama candidate generation used the local fallback:\n\n{warning_lines}")
         st.session_state.ollama_text = "\n".join(f"- {note}" for note in plan.generation_notes)
     elif api_key:
         ollama_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "ollama"]
@@ -1059,6 +1194,20 @@ def _render_algorithm_planner_result(result: AlgorithmPlannerResult) -> None:
     if result.safety_error:
         st.info(result.safety_error)
 
+    has_renderable_details = any(
+        [
+            result.problem_understanding,
+            result.step_by_step_optimization_plan,
+            result.best_data_structure_algorithm_choice,
+            result.final_optimized_python_code,
+            result.time_complexity,
+            result.space_complexity,
+            result.test_cases,
+        ]
+    )
+    if not result.valid and not has_renderable_details:
+        return
+
     st.subheader("Problem Understanding")
     st.write(result.problem_understanding or "Not available.")
 
@@ -1209,6 +1358,8 @@ def _render_code_analyzer_workflow() -> None:
         current_api_key = _resolve_ollama_key_for_action("code_analyzer")
         if current_api_key is None:
             return
+        if plan_clicked:
+            st.session_state.ollama_candidate_cache = {}
         st.session_state.code_analyzer_plan_submit_pending = False
         with st.spinner("Analyzing code, collecting benchmark metrics, and validating optimized candidates..."):
             _build_verified_optimization_plan(current_api_key)
@@ -1289,8 +1440,14 @@ def main() -> None:
 
         st.divider()
         st.markdown("#### LLM model")
+        if (
+            st.session_state.get("selected_llm_model") == "DeepSeek V4 Flash"
+            and not st.session_state.get("migrated_default_llm_to_pro", False)
+        ):
+            st.session_state.selected_llm_model = "DeepSeek V4 Pro"
+        st.session_state.migrated_default_llm_to_pro = True
         if st.session_state.get("selected_llm_model") not in OLLAMA_MODEL_OPTIONS:
-            st.session_state.selected_llm_model = "DeepSeek V4 Flash"
+            st.session_state.selected_llm_model = "DeepSeek V4 Pro"
         st.selectbox(
             "Use model for optimized code",
             list(OLLAMA_MODEL_OPTIONS.keys()),
@@ -1322,7 +1479,8 @@ def main() -> None:
         if st.session_state.docker_backend:
             st.caption("Docker available: " + ("yes" if docker_available() else "no"))
         st.selectbox("Benchmark profile", ["Quick", "Balanced", "Stress"], index=1, key="benchmark_profile")
-        entrypoint_options = _sync_entrypoint_with_code()
+        sidebar_context = _analysis_context()
+        entrypoint_options = sidebar_context.entrypoint_options if sidebar_context else []
         if entrypoint_options:
             current_entrypoint = st.session_state.entrypoint
             st.selectbox(
@@ -1339,15 +1497,6 @@ def main() -> None:
                 key="entrypoint",
                 help="No functions were detected. Leave blank to benchmark top-level script execution.",
             )
-        definitions = discover_entrypoints(str(st.session_state.get("editor_code", "") or ""))
-        if not st.session_state.get("generated_test_cases"):
-            st.session_state.generated_test_cases = generate_test_cases(
-                code=str(st.session_state.get("editor_code", "") or ""),
-                entrypoint=st.session_state.entrypoint,
-                definitions=definitions,
-                target_count=DEFAULT_BENCHMARK_CASE_COUNT,
-            )
-            st.session_state.generated_test_case_source = "local"
         _refresh_benchmark_input_for_entrypoint()
         benchmark_input_value = st.text_area(
             "Custom benchmark input",
