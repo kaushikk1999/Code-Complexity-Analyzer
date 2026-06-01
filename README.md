@@ -161,7 +161,7 @@ For public deployments, enable `Static-only public mode` in the sidebar when dem
 
 Ollama Cloud is optional. The app works fully without it.
 
-To use Ollama-enhanced coaching with `deepseek-v4-flash:cloud` on Ollama Cloud:
+To use Ollama-enhanced coaching and optimized-code generation with Ollama Cloud:
 
 1. Install dependencies from `requirements.txt`.
 2. Create a local `.env` file in the project root:
@@ -181,7 +181,15 @@ Ollama receives a compact JSON object of local facts and is used only to improve
 - static complexity estimates,
 - optimization scoring.
 
-The preferred Ollama Cloud model is `deepseek-v4-flash:cloud`. If the account does not have subscription access to DeepSeek-V4-Flash, the app falls back to `qwen3-coder-next:cloud`.
+The default Ollama Cloud model is `deepseek-v4-pro:cloud` because it is the strongest general option for optimized-code generation and benchmark-verified algorithmic improvements. The app supports only these Ollama Cloud models:
+
+| Display name | Model ID | Purpose |
+| --- | --- | --- |
+| DeepSeek V4 Pro | `deepseek-v4-pro:cloud` | Default best overall optimized-code generation model |
+| GLM-5.1 | `glm-5.1:cloud` | Repo-level engineering and deeper refactoring model |
+| DeepSeek V4 Flash | `deepseek-v4-flash:cloud` | Fast/cost-efficient candidate generation model |
+
+If the selected model is unavailable, the app falls back only within this approved model set: `deepseek-v4-pro:cloud`, `glm-5.1:cloud`, then `deepseek-v4-flash:cloud`.
 
 Ollama API projects can still hit model, account, or rate limits. When Algorithm Planner receives an Ollama quota or rate-limit response, Complexity Lab returns a local fallback optimization plan instead of blocking the workflow with a hard error.
 

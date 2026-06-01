@@ -30,7 +30,13 @@ from llm import (
     generate_optimized_code_with_ollama,
     generate_test_cases_with_ollama,
 )
-from llm.ollama_errors import DEFAULT_OLLAMA_MODEL, OLLAMA_MODEL_OPTIONS, normalize_model_name
+from llm.ollama_errors import (
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_MODEL_LABEL,
+    OLLAMA_MODEL_HELP,
+    OLLAMA_MODEL_OPTIONS,
+    normalize_model_name,
+)
 from optimization import (
     OptimizationPlan,
     OptimizationStep,
@@ -77,19 +83,6 @@ from visualization.ui_helpers import (
 )
 
 LEGACY_DEFAULT_BENCHMARK_INPUT = '{"args": [[2, 7, 11, 15, 21, 30, 42, 55], 57]}'
-LLM_MODEL_HELP = {
-    "DeepSeek V4 Flash": "Efficient preview of the DeepSeek-V4 MoE series with a 1M-token context window.",
-    "DeepSeek V4 Pro": "Frontier DeepSeek-V4 MoE model with a 1M-token context window and reasoning modes.",
-    "Kimi K2.6": "Long-horizon coding, coding-driven design, autonomous execution, and orchestration.",
-    "GLM-5.1": "Flagship agentic engineering model with stronger coding capabilities.",
-    "MiniMax M2.7": "Coding, agentic workflows, and professional productivity.",
-    "Gemma 4": "Reasoning, agentic workflows, coding, and multimodal understanding.",
-    "Nemotron 3 Super": "Efficient open MoE model for complex multi-agent applications.",
-    "Qwen 3.5": "Open multimodal model family with strong utility and performance.",
-    "GPT OSS 120B": "Large open-weight GPT OSS model.",
-}
-
-
 st.set_page_config(
     page_title=APP_NAME,
     page_icon="🧪",
@@ -167,7 +160,7 @@ def _initialize_state() -> None:
         "code_analyzer_plan_submit_pending": False,
         "benchmark_input_widget_version": 0,
         "ollama_api_key": "",
-        "selected_llm_model": "DeepSeek V4 Pro",
+        "selected_llm_model": DEFAULT_OLLAMA_MODEL_LABEL,
         "benchmark_history": [],
         "practice_session": "Arrays",
         "static_only_mode": False,
@@ -563,7 +556,7 @@ def _build_verified_optimization_plan(api_key: str) -> None:
 
     if plan.generation_notes:
         warning_lines = "\n".join(f"- {note}" for note in plan.generation_notes)
-        st.warning(f"Ollama candidate generation used the local fallback:\n\n{warning_lines}")
+        st.warning(f"Ollama was unavailable, so Complexity Lab used the local verified optimizer:\n\n{warning_lines}")
         st.session_state.ollama_text = "\n".join(f"- {note}" for note in plan.generation_notes)
     elif api_key:
         ollama_candidates = [candidate for candidate in plan.verified_candidates if candidate.source == "ollama"]
@@ -1440,14 +1433,8 @@ def main() -> None:
 
         st.divider()
         st.markdown("#### LLM model")
-        if (
-            st.session_state.get("selected_llm_model") == "DeepSeek V4 Flash"
-            and not st.session_state.get("migrated_default_llm_to_pro", False)
-        ):
-            st.session_state.selected_llm_model = "DeepSeek V4 Pro"
-        st.session_state.migrated_default_llm_to_pro = True
         if st.session_state.get("selected_llm_model") not in OLLAMA_MODEL_OPTIONS:
-            st.session_state.selected_llm_model = "DeepSeek V4 Pro"
+            st.session_state.selected_llm_model = DEFAULT_OLLAMA_MODEL_LABEL
         st.selectbox(
             "Use model for optimized code",
             list(OLLAMA_MODEL_OPTIONS.keys()),
@@ -1456,7 +1443,7 @@ def main() -> None:
         )
         selected_model_label = str(st.session_state.get("selected_llm_model", "") or "")
         selected_model_id = _selected_ollama_model()
-        st.caption(LLM_MODEL_HELP.get(selected_model_label, "Selected Ollama model."))
+        st.caption(OLLAMA_MODEL_HELP.get(selected_model_label, "Selected Ollama model."))
         st.caption(f"Model id: `{selected_model_id}`")
 
         st.divider()

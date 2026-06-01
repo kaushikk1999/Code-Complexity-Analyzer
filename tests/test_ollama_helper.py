@@ -5,8 +5,7 @@ import types
 import pytest
 
 from analyzer.models import StaticAnalysisResult
-from llm import ollama_errors
-from llm import ollama_helper
+from llm import ollama_errors, ollama_helper
 from optimization.planner import OptimizationPlan
 from scoring.optimizer_score import ScoreBreakdown
 from utils.entrypoints import EntrypointDefinition
@@ -66,7 +65,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. The app will try deepseek-v4-pro:cloud and qwen3-coder-next:cloud as fallbacks.",
+            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to deepseek-v4-pro:cloud, glm-5.1:cloud, or deepseek-v4-flash:cloud.",
         ),
     ],
 )
@@ -152,7 +151,7 @@ def test_successful_structured_optimized_code_generation(monkeypatch):
     assert candidate.validation_tests == ["assert two_sum([2, 7], 9) == [0, 1]"]
 
 
-def test_ollama_helper_uses_deepseek_flash_first(monkeypatch):
+def test_ollama_helper_uses_deepseek_pro_first(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -180,7 +179,7 @@ def test_ollama_helper_uses_deepseek_flash_first(monkeypatch):
     assert calls == ["deepseek-v4-pro:cloud"]
 
 
-def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(monkeypatch):
+def test_ollama_helper_falls_back_to_glm_when_deepseek_pro_is_unavailable(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -203,7 +202,7 @@ def test_ollama_helper_falls_back_to_qwen_when_deepseek_flash_is_unavailable(mon
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
+    assert calls == ["deepseek-v4-pro:cloud", "glm-5.1:cloud"]
 
 
 def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
@@ -211,27 +210,26 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
+    assert candidates == ["deepseek-v4-pro:cloud", "glm-5.1:cloud", "deepseek-v4-flash:cloud"]
 
 
 def test_visible_ollama_model_options_are_restricted_to_approved_models():
     expected = {
-        "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
         "DeepSeek V4 Pro": "deepseek-v4-pro:cloud",
-        "Kimi K2.6": "kimi-k2.6:cloud",
         "GLM-5.1": "glm-5.1:cloud",
-        "MiniMax M2.7": "minimax-m2.7:cloud",
-        "Gemma 4": "gemma4:cloud",
-        "Nemotron 3 Super": "nemotron-3-super:cloud",
-        "Qwen 3.5": "qwen3.5:cloud",
-        "GPT OSS 120B": "gpt-oss:120b-cloud",
+        "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
     }
 
     assert ollama_errors.OLLAMA_MODEL_OPTIONS == expected
-    assert "GLM-5" not in ollama_errors.OLLAMA_MODEL_OPTIONS
-    assert "MiniMax M2.5" not in ollama_errors.OLLAMA_MODEL_OPTIONS
     for label, model_id in expected.items():
         assert ollama_errors.normalize_model_name(label) == model_id
+    assert ollama_errors.DEFAULT_OLLAMA_MODEL_LABEL == "DeepSeek V4 Pro"
+    assert ollama_errors.DEFAULT_OLLAMA_MODEL == "deepseek-v4-pro:cloud"
+    assert ollama_errors.OLLAMA_MODEL_FALLBACKS == (
+        "deepseek-v4-pro:cloud",
+        "glm-5.1:cloud",
+        "deepseek-v4-flash:cloud",
+    )
 
 
 def test_generate_optimized_code_uses_env_api_key(monkeypatch):

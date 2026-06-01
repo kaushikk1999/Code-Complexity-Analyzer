@@ -76,7 +76,7 @@ def test_ollama_failure_is_sanitized_and_does_not_leak_key(monkeypatch):
     [
         (
             "model_unavailable",
-            "Ollama Cloud request failed for the selected model. The app will try deepseek-v4-pro:cloud and qwen3-coder-next:cloud as fallbacks.",
+            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to deepseek-v4-pro:cloud, glm-5.1:cloud, or deepseek-v4-flash:cloud.",
         ),
     ],
 )
@@ -321,7 +321,7 @@ def test_algorithm_planner_uses_env_key_without_sidebar_ollama_key_input():
     assert "pending_ollama_api_key" not in app_source
 
 
-def test_algorithm_planner_falls_back_to_qwen_when_deepseek_flash_is_unavailable(monkeypatch):
+def test_algorithm_planner_falls_back_to_glm_when_deepseek_pro_is_unavailable(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -358,7 +358,7 @@ def test_algorithm_planner_falls_back_to_qwen_when_deepseek_flash_is_unavailable
     result = algorithm_planner._generate_with_ollama("Return the input.", "SECRET_TEST_KEY")
 
     assert result["problem_understanding"] == "Fallback worked."
-    assert calls == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
+    assert calls == ["deepseek-v4-pro:cloud", "glm-5.1:cloud"]
 
 
 def test_algorithm_planner_repairs_non_json_ollama_response(monkeypatch):
@@ -404,4 +404,4 @@ def test_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = algorithm_planner._model_candidates()
 
-    assert candidates == ["deepseek-v4-pro:cloud", "qwen3-coder-next:cloud"]
+    assert candidates == ["deepseek-v4-pro:cloud", "glm-5.1:cloud", "deepseek-v4-flash:cloud"]

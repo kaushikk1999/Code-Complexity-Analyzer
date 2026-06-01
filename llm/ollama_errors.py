@@ -2,29 +2,27 @@
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
+DEFAULT_OLLAMA_MODEL_LABEL = "DeepSeek V4 Pro"
 DEFAULT_OLLAMA_MODEL = "deepseek-v4-pro:cloud"
-OLLAMA_MODEL_FALLBACKS = (DEFAULT_OLLAMA_MODEL, "qwen3-coder-next:cloud")
 OLLAMA_MODEL_OPTIONS = {
-    "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
     "DeepSeek V4 Pro": "deepseek-v4-pro:cloud",
-    "Kimi K2.6": "kimi-k2.6:cloud",
     "GLM-5.1": "glm-5.1:cloud",
-    "MiniMax M2.7": "minimax-m2.7:cloud",
-    "Gemma 4": "gemma4:cloud",
-    "Nemotron 3 Super": "nemotron-3-super:cloud",
-    "Qwen 3.5": "qwen3.5:cloud",
-    "GPT OSS 120B": "gpt-oss:120b-cloud",
+    "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
 }
+OLLAMA_MODEL_HELP = {
+    "DeepSeek V4 Pro": "Default best overall optimized-code generation model.",
+    "GLM-5.1": "Repo-level engineering and deeper refactoring model.",
+    "DeepSeek V4 Flash": "Fast/cost-efficient candidate generation model.",
+}
+OLLAMA_MODEL_FALLBACKS = tuple(OLLAMA_MODEL_OPTIONS.values())
 OLLAMA_HOST = "https://ollama.com"
 
 
@@ -116,8 +114,9 @@ def ollama_error_message(category: str) -> str:
         "invalid_key": "Ollama rejected the API key. Check that it is active in your Ollama account.",
         "quota": "Ollama quota or rate limit was reached. Try again later.",
         "model_unavailable": (
-            "Ollama Cloud request failed for the selected model. "
-            "The app will try deepseek-v4-pro:cloud and qwen3-coder-next:cloud as fallbacks."
+            "Ollama Cloud could not access any approved model for this API key. "
+            "Check that the key is active and has access to deepseek-v4-pro:cloud, glm-5.1:cloud, "
+            "or deepseek-v4-flash:cloud."
         ),
         "malformed_response": "Ollama responded, but not in the expected format. Try again.",
         "missing_package": "The Ollama Python SDK is not installed. Install ollama and try again.",

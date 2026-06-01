@@ -118,7 +118,7 @@ def merge_generated_and_custom_benchmark_input(cases: List[GeneratedTestCase], c
     return json.dumps({"cases": payload_cases}, ensure_ascii=False, indent=2)
 
 
-def _number_for_arg(arg: str, index: int) -> int:
+def _number_for_arg(arg: str, index: int) -> Any:
     lowered = arg.lower()
     if "dict" in lowered:
         return ["a", "aa", "aaa", "b"][: max(1, (index % 4) + 1)]
@@ -151,7 +151,7 @@ def _fallback_cases_for_args(
 ) -> List[GeneratedTestCase]:
     cases: List[GeneratedTestCase] = []
     for index in range(target_count):
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         for arg_index, arg in enumerate(args):
             if arg_index == 0:
                 if definition and _arg_expects_string(definition, arg) and not _arg_expects_sequence(definition, arg):
