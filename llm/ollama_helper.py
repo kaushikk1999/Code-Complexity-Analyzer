@@ -23,9 +23,10 @@ from utils.test_case_generator import DEFAULT_BENCHMARK_CASE_COUNT, GeneratedTes
 class OllamaHelperError(Exception):
     """Ollama failure category safe to render in the UI."""
 
-    def __init__(self, category: str = "request_failed") -> None:
+    def __init__(self, category: str = "request_failed", raw_error: str = "") -> None:
         super().__init__(category)
         self.category = category
+        self.raw_error = raw_error
 
 
 def _model_candidates(preferred_model: str = "") -> list[str]:
@@ -85,9 +86,9 @@ def _request_ollama_text(api_key: str, prompt: str, *, json_mode: bool = False, 
             if category == "model_unavailable":
                 last_model_error = exc
                 continue
-            raise OllamaHelperError(category) from exc
+            raise OllamaHelperError(category, str(exc)) from exc
 
-    raise OllamaHelperError("model_unavailable") from last_model_error
+    raise OllamaHelperError("model_unavailable", str(last_model_error)) from last_model_error
 
 
 def enhance_with_ollama(
@@ -149,7 +150,10 @@ Return concise Markdown with exactly these headings:
         else:
             text = _request_ollama_text(api_key, prompt)
     except OllamaHelperError as exc:
-        return f"Ollama enhancement failed. {_ollama_error_message(exc.category)}"
+        msg = f"Ollama enhancement failed. {_ollama_error_message(exc.category)}"
+        if exc.raw_error:
+            msg += f" (Raw error: {exc.raw_error})"
+        return msg
     except Exception as exc:
         return f"Ollama enhancement failed. {_ollama_error_message(_classify_ollama_error(exc))}"
     return text or "Ollama returned an empty response."
@@ -299,7 +303,10 @@ Original code:
             text = _request_ollama_text(api_key, prompt, json_mode=True)
         payload = _extract_json_object(text)
     except OllamaHelperError as exc:
-        return None, f"Ollama optimization generation failed. {_ollama_error_message(exc.category)}"
+        msg = f"Ollama optimization generation failed. {_ollama_error_message(exc.category)}"
+        if exc.raw_error:
+            msg += f" (Raw error: {exc.raw_error})"
+        return None, msg
     except (json.JSONDecodeError, ValueError):
         return None, f"Ollama optimization generation failed. {_ollama_error_message('malformed_response')}"
     except Exception as exc:
@@ -382,7 +389,10 @@ Code:
             text = _request_ollama_text(api_key, prompt, json_mode=True)
         payload = _extract_json_object(text)
     except OllamaHelperError as exc:
-        return [], _ollama_error_message(exc.category)
+        msg = _ollama_error_message(exc.category)
+        if exc.raw_error:
+            msg += f" (Raw error: {exc.raw_error})"
+        return [], msg
     except Exception as exc:
         return [], _ollama_error_message(_classify_ollama_error(exc))
 
