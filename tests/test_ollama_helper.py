@@ -65,7 +65,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to gpt-oss:120b, nemotron-3-ultra, gemma4:31b, minimax-m2.5, or gpt-oss:20b.",
+            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to gpt-oss:120b, nemotron-3-ultra, minimax-m3, or gemma4:31b.",
         ),
     ],
 )
@@ -210,16 +210,15 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates == ["gpt-oss:120b", "nemotron-3-ultra", "gemma4:31b", "minimax-m2.5", "gpt-oss:20b"]
+    assert candidates == ["gpt-oss:120b", "nemotron-3-ultra", "minimax-m3", "gemma4:31b"]
 
 
 def test_visible_ollama_model_options_are_restricted_to_approved_models():
     expected = {
         "GPT-OSS (120B)": "gpt-oss:120b",
         "Nemotron 3 Ultra": "nemotron-3-ultra",
+        "MiniMax M3": "minimax-m3",
         "Gemma 4 (31B)": "gemma4:31b",
-        "MiniMax M2.5": "minimax-m2.5",
-        "GPT-OSS (20B)": "gpt-oss:20b",
     }
 
     assert ollama_errors.OLLAMA_MODEL_OPTIONS == expected
@@ -230,9 +229,8 @@ def test_visible_ollama_model_options_are_restricted_to_approved_models():
     assert ollama_errors.OLLAMA_MODEL_FALLBACKS == (
         "gpt-oss:120b",
         "nemotron-3-ultra",
+        "minimax-m3",
         "gemma4:31b",
-        "minimax-m2.5",
-        "gpt-oss:20b",
     )
 
 

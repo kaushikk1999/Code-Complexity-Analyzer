@@ -76,7 +76,7 @@ def test_ollama_failure_is_sanitized_and_does_not_leak_key(monkeypatch):
     [
         (
             "model_unavailable",
-            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to gpt-oss:120b, nemotron-3-ultra, gemma4:31b, minimax-m2.5, or gpt-oss:20b.",
+            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to gpt-oss:120b, nemotron-3-ultra, minimax-m3, or gemma4:31b.",
         ),
     ],
 )
@@ -404,4 +404,4 @@ def test_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = algorithm_planner._model_candidates()
 
-    assert candidates == ["gpt-oss:120b", "nemotron-3-ultra", "gemma4:31b", "minimax-m2.5", "gpt-oss:20b"]
+    assert candidates == ["gpt-oss:120b", "nemotron-3-ultra", "minimax-m3", "gemma4:31b"]
