@@ -10,17 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-DEFAULT_OLLAMA_MODEL_LABEL = "DeepSeek V4 Pro"
-DEFAULT_OLLAMA_MODEL = "deepseek-v4-pro:cloud"
+DEFAULT_OLLAMA_MODEL_LABEL = "Qwen3 Coder Next"
+DEFAULT_OLLAMA_MODEL = "qwen3-coder-next"
 OLLAMA_MODEL_OPTIONS = {
-    "DeepSeek V4 Pro": "deepseek-v4-pro:cloud",
-    "GLM-5.1": "glm-5.1:cloud",
-    "DeepSeek V4 Flash": "deepseek-v4-flash:cloud",
+    "Qwen3 Coder Next": "qwen3-coder-next",
+    "Gemma 4 (31B)": "gemma4:31b",
+    "RNJ-1 (8B)": "rnj-1:8b",
+    "Ministral 3 (8B)": "ministral-3:8b",
+    "MiniMax M3": "minimax-m3",
 }
 OLLAMA_MODEL_HELP = {
-    "DeepSeek V4 Pro": "Default best overall optimized-code generation model.",
-    "GLM-5.1": "Repo-level engineering and deeper refactoring model.",
-    "DeepSeek V4 Flash": "Fast/cost-efficient candidate generation model.",
+    "Qwen3 Coder Next": "Coding-focused language model optimized for agentic coding workflows.",
+    "Gemma 4 (31B)": "Designed to deliver frontier-level performance at each size.",
+    "RNJ-1 (8B)": "Open-weight, dense models optimized for code and STEM.",
+    "Ministral 3 (8B)": "Designed for edge deployment.",
+    "MiniMax M3": "Coding & Agentic Frontier.",
 }
 OLLAMA_MODEL_FALLBACKS = tuple(OLLAMA_MODEL_OPTIONS.values())
 OLLAMA_HOST = "https://ollama.com"
@@ -115,8 +119,7 @@ def ollama_error_message(category: str) -> str:
         "quota": "Ollama quota or rate limit was reached. Try again later.",
         "model_unavailable": (
             "Ollama Cloud could not access any approved model for this API key. "
-            "Check that the key is active and has access to deepseek-v4-pro:cloud, glm-5.1:cloud, "
-            "or deepseek-v4-flash:cloud."
+            "Check that the key is active and has access to qwen3-coder-next, gemma4:31b, rnj-1:8b, ministral-3:8b, or minimax-m3."
         ),
         "malformed_response": "Ollama responded, but not in the expected format. Try again.",
         "missing_package": "The Ollama Python SDK is not installed. Install ollama and try again.",
