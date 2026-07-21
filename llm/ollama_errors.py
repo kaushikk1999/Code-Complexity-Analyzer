@@ -10,21 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-DEFAULT_OLLAMA_MODEL_LABEL = "MiniMax M3"
-DEFAULT_OLLAMA_MODEL = "minimax-m3"
+DEFAULT_OLLAMA_MODEL_LABEL = "GPT-OSS (120B)"
+DEFAULT_OLLAMA_MODEL = "gpt-oss:120b"
 OLLAMA_MODEL_OPTIONS = {
-    "MiniMax M3": "minimax-m3",
     "GPT-OSS (120B)": "gpt-oss:120b",
-    "Gemma 4 (31B)": "gemma4:31b",
     "Nemotron 3 Ultra": "nemotron-3-ultra",
+    "Gemma 4 (31B)": "gemma4:31b",
+    "MiniMax M2.5": "minimax-m2.5",
     "GPT-OSS (20B)": "gpt-oss:20b",
 }
 OLLAMA_MODEL_HELP = {
-    "MiniMax M3": "Coding and agentic frontier model. Default candidate generator.",
-    "GPT-OSS (120B)": "Large open-weight model for deeper refactoring passes.",
+    "GPT-OSS (120B)": "Default. Large open-weight model with fast, clean JSON output.",
+    "Nemotron 3 Ultra": "Reasoning-oriented alternative with comparable latency.",
     "Gemma 4 (31B)": "Frontier-level performance at a smaller size.",
-    "Nemotron 3 Ultra": "Reasoning-oriented alternative when other models are busy.",
-    "GPT-OSS (20B)": "Fast, cost-efficient fallback for quick candidates.",
+    "MiniMax M2.5": "Coding-focused candidate generator. Slower than the default.",
+    "GPT-OSS (20B)": "Smaller sibling of the default. Noticeably slower in practice.",
 }
 OLLAMA_MODEL_FALLBACKS = tuple(OLLAMA_MODEL_OPTIONS.values())
 OLLAMA_HOST = "https://ollama.com"
@@ -119,7 +119,7 @@ def ollama_error_message(category: str) -> str:
         "quota": "Ollama quota or rate limit was reached. Try again later.",
         "model_unavailable": (
             "Ollama Cloud could not access any approved model for this API key. "
-            "Check that the key is active and has access to minimax-m3, gpt-oss:120b, gemma4:31b, nemotron-3-ultra, or gpt-oss:20b."
+            "Check that the key is active and has access to gpt-oss:120b, nemotron-3-ultra, gemma4:31b, minimax-m2.5, or gpt-oss:20b."
         ),
         "malformed_response": "Ollama responded, but not in the expected format. Try again.",
         "missing_package": "The Ollama Python SDK is not installed. Install ollama and try again.",

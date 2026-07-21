@@ -293,16 +293,18 @@ def _resolve_generated_test_cases(
     definitions: List[EntrypointDefinition],
     api_key: str = "",
     code_hash: str = "",
+    allow_llm: bool = False,
 ) -> None:
     code_hash = code_hash or _code_hash(code)
     definition = find_entrypoint_definition(definitions, st.session_state.entrypoint)
     llm_key = str(api_key or os.getenv("OLLAMA_API_KEY", "") or "").strip()
+    use_llm = bool(definition and llm_key and allow_llm)
     cache_key = "|".join(
         [
             code_hash,
             st.session_state.entrypoint,
             _selected_ollama_model() if llm_key else "local",
-            "llm" if definition and llm_key else "local",
+            "llm" if use_llm else "local",
             str(DEFAULT_BENCHMARK_CASE_COUNT),
         ]
     )
@@ -312,7 +314,7 @@ def _resolve_generated_test_cases(
     ):
         return
 
-    if definition and llm_key:
+    if use_llm:
         llm_cases, llm_error = generate_test_cases_with_ollama(
             api_key=llm_key,
             code=code,
@@ -320,14 +322,32 @@ def _resolve_generated_test_cases(
             model_name=_selected_ollama_model(),
             target_count=DEFAULT_BENCHMARK_CASE_COUNT,
         )
-        if len(llm_cases) == DEFAULT_BENCHMARK_CASE_COUNT:
-            st.session_state.generated_test_cases = llm_cases
+        if len(llm_cases) >= DEFAULT_BENCHMARK_CASE_COUNT:
+            st.session_state.generated_test_cases = llm_cases[:DEFAULT_BENCHMARK_CASE_COUNT]
             st.session_state.generated_test_case_source = "llm"
             st.session_state.generated_test_case_note = ""
             st.session_state.generated_test_case_cache_key = cache_key
             return
-        st.session_state.generated_test_case_note = llm_error or "LLM did not return the required 40 cases."
-    else:
+        if llm_cases:
+            # A short response is still usable: keep it and top up locally rather
+            # than discarding a slow generation over an off-by-one shortfall.
+            local_cases = _cached_local_test_cases(
+                code_hash,
+                code,
+                st.session_state.entrypoint,
+                DEFAULT_BENCHMARK_CASE_COUNT,
+            )
+            topped_up = (list(llm_cases) + list(local_cases))[:DEFAULT_BENCHMARK_CASE_COUNT]
+            st.session_state.generated_test_cases = topped_up
+            st.session_state.generated_test_case_source = "llm+local"
+            st.session_state.generated_test_case_note = (
+                f"Ollama returned {len(llm_cases)} of {DEFAULT_BENCHMARK_CASE_COUNT} cases; "
+                "the remainder are local fallback cases."
+            )
+            st.session_state.generated_test_case_cache_key = cache_key
+            return
+        st.session_state.generated_test_case_note = llm_error or "LLM did not return any usable cases."
+    elif not llm_key:
         st.session_state.generated_test_case_note = "Using local fallback cases because no Ollama API key is configured."
 
     st.session_state.generated_test_cases = _cached_local_test_cases(
@@ -353,7 +373,11 @@ def _sync_entrypoint_with_code(update_state: bool = True) -> List[str]:
     return [definition.callable_name for definition in definitions]
 
 
-def _analysis_context(api_key: str = "", autofill_benchmark_input: bool = False) -> Optional[AnalysisContext]:
+def _analysis_context(
+    api_key: str = "",
+    autofill_benchmark_input: bool = False,
+    allow_llm: bool = False,
+) -> Optional[AnalysisContext]:
     code = str(st.session_state.get("editor_code", "") or "")
     if len(code) > MAX_CODE_CHARS:
         st.error(f"Code is too large for this app demo. Limit: {MAX_CODE_CHARS:,} characters.")
@@ -364,7 +388,13 @@ def _analysis_context(api_key: str = "", autofill_benchmark_input: bool = False)
         selected = _choose_entrypoint_from_definitions(definitions, st.session_state.get("entrypoint", ""))
         if st.session_state.get("entrypoint") != selected:
             st.session_state.entrypoint = selected
-    _resolve_generated_test_cases(code, definitions, api_key=api_key, code_hash=code_hash)
+    _resolve_generated_test_cases(
+        code,
+        definitions,
+        api_key=api_key,
+        code_hash=code_hash,
+        allow_llm=allow_llm,
+    )
     _refresh_benchmark_input_for_entrypoint()
     if autofill_benchmark_input:
         _autofill_benchmark_input_from_generated_cases()
@@ -387,7 +417,11 @@ def _analyze_current(
     api_key: str = "",
     autofill_benchmark_input: bool = False,
 ) -> None:
-    context = _analysis_context(api_key=api_key, autofill_benchmark_input=autofill_benchmark_input)
+    context = _analysis_context(
+        api_key=api_key,
+        autofill_benchmark_input=autofill_benchmark_input,
+        allow_llm=bool(api_key),
+    )
     if not context:
         return
     analysis = _cached_analyze_code(context.code_hash, context.code)

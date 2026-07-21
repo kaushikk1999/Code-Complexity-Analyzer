@@ -65,7 +65,7 @@ def test_enhance_invalid_key_is_sanitized_and_does_not_leak_key(monkeypatch):
         ("quota", "Ollama quota or rate limit was reached. Try again later."),
         (
             "model_unavailable",
-            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to minimax-m3, gpt-oss:120b, gemma4:31b, nemotron-3-ultra, or gpt-oss:20b.",
+            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to gpt-oss:120b, nemotron-3-ultra, gemma4:31b, minimax-m2.5, or gpt-oss:20b.",
         ),
     ],
 )
@@ -151,7 +151,7 @@ def test_successful_structured_optimized_code_generation(monkeypatch):
     assert candidate.validation_tests == ["assert two_sum([2, 7], 9) == [0, 1]"]
 
 
-def test_ollama_helper_uses_minimax_first(monkeypatch):
+def test_ollama_helper_uses_gptoss_first(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -176,10 +176,10 @@ def test_ollama_helper_uses_minimax_first(monkeypatch):
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls == ["minimax-m3"]
+    assert calls == ["gpt-oss:120b"]
 
 
-def test_ollama_helper_falls_back_to_gptoss_when_minimax_is_unavailable(monkeypatch):
+def test_ollama_helper_falls_back_to_nemotron_when_gptoss_is_unavailable(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -193,7 +193,7 @@ def test_ollama_helper_falls_back_to_gptoss_when_minimax_is_unavailable(monkeypa
 
     def fake_generate_content(client, model_name: str, prompt: str, json_mode=False):
         calls.append(model_name)
-        if model_name == "minimax-m3":
+        if model_name == "gpt-oss:120b":
             raise RuntimeError("this model requires a subscription (status code: 403)")
         return '{"ok": true}'
 
@@ -202,7 +202,7 @@ def test_ollama_helper_falls_back_to_gptoss_when_minimax_is_unavailable(monkeypa
     text = ollama_helper._request_ollama_text("SECRET_TEST_KEY", "prompt", json_mode=True)
 
     assert text == '{"ok": true}'
-    assert calls == ["minimax-m3", "gpt-oss:120b"]
+    assert calls == ["gpt-oss:120b", "nemotron-3-ultra"]
 
 
 def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
@@ -210,28 +210,28 @@ def test_ollama_helper_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = ollama_helper._model_candidates()
 
-    assert candidates == ["minimax-m3", "gpt-oss:120b", "gemma4:31b", "nemotron-3-ultra", "gpt-oss:20b"]
+    assert candidates == ["gpt-oss:120b", "nemotron-3-ultra", "gemma4:31b", "minimax-m2.5", "gpt-oss:20b"]
 
 
 def test_visible_ollama_model_options_are_restricted_to_approved_models():
     expected = {
-        "MiniMax M3": "minimax-m3",
         "GPT-OSS (120B)": "gpt-oss:120b",
-        "Gemma 4 (31B)": "gemma4:31b",
         "Nemotron 3 Ultra": "nemotron-3-ultra",
+        "Gemma 4 (31B)": "gemma4:31b",
+        "MiniMax M2.5": "minimax-m2.5",
         "GPT-OSS (20B)": "gpt-oss:20b",
     }
 
     assert ollama_errors.OLLAMA_MODEL_OPTIONS == expected
     for label, model_id in expected.items():
         assert ollama_errors.normalize_model_name(label) == model_id
-    assert ollama_errors.DEFAULT_OLLAMA_MODEL_LABEL == "MiniMax M3"
-    assert ollama_errors.DEFAULT_OLLAMA_MODEL == "minimax-m3"
+    assert ollama_errors.DEFAULT_OLLAMA_MODEL_LABEL == "GPT-OSS (120B)"
+    assert ollama_errors.DEFAULT_OLLAMA_MODEL == "gpt-oss:120b"
     assert ollama_errors.OLLAMA_MODEL_FALLBACKS == (
-        "minimax-m3",
         "gpt-oss:120b",
-        "gemma4:31b",
         "nemotron-3-ultra",
+        "gemma4:31b",
+        "minimax-m2.5",
         "gpt-oss:20b",
     )
 
