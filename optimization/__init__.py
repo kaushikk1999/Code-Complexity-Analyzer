@@ -2,6 +2,7 @@
 
 from optimization.planner import (
     CandidateBenchmarkComparison,
+    ModelComparisonRow,
     OptimizationPlan,
     OptimizationStep,
     OptimizedCodeCandidate,
@@ -11,6 +12,7 @@ from optimization.planner import (
     build_local_candidate,
     build_optimization_plan,
     candidate_is_better,
+    generate_multi_model_verified_candidates,
     generate_verified_optimization_candidates,
     preserve_entrypoint_name,
     validate_optimized_candidate,
@@ -20,6 +22,7 @@ __all__ = [
     "OptimizedCodeCandidate",
     "OptimizedCodeValidation",
     "CandidateBenchmarkComparison",
+    "ModelComparisonRow",
     "OptimizationPlan",
     "OptimizationStep",
     "TieredOptimizationCandidate",
@@ -27,6 +30,7 @@ __all__ = [
     "build_optimization_plan",
     "build_local_candidate",
     "candidate_is_better",
+    "generate_multi_model_verified_candidates",
     "generate_verified_optimization_candidates",
     "preserve_entrypoint_name",
     "validate_optimized_candidate",

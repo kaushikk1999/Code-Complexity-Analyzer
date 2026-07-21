@@ -41,6 +41,7 @@ from optimization import (
     OptimizationPlan,
     OptimizationStep,
     build_optimization_plan,
+    generate_multi_model_verified_candidates,
     generate_verified_optimization_candidates,
 )
 from scoring import ScoreBreakdown, calculate_optimization_score
@@ -169,6 +170,7 @@ def _initialize_state() -> None:
         "interview_answer": "",
         "benchmark_input_entrypoint": "",
         "generated_test_cases": [],
+        "compare_all_models": False,
         "generated_test_case_source": "local",
         "generated_test_case_note": "",
         "generated_test_case_cache_key": "",
@@ -574,18 +576,52 @@ def _build_verified_optimization_plan(api_key: str) -> None:
             candidate_cache[cache_key] = result
             return result
 
-    plan = generate_verified_optimization_candidates(
-        original_code=context.code,
-        analysis=analysis,
-        score=score,
-        entrypoint=context.selected_entrypoint,
-        benchmark_input=context.benchmark_input,
-        api_key=api_key,
-        plan=seed_plan,
-        candidate_provider=candidate_provider,
-        repeat_count=st.session_state.repeat_count,
-        timeout_seconds=st.session_state.timeout_seconds,
-    )
+    if api_key and st.session_state.get("compare_all_models"):
+        # Snapshot everything the worker threads need: Streamlit session state is
+        # not safe to touch off the main thread.
+        models = list(OLLAMA_MODEL_OPTIONS.values())
+        snapshot_code = context.code
+        snapshot_entrypoint = context.selected_entrypoint
+
+        def model_candidate_provider(model: str, level: str, rejection_reasons: List[str]):
+            return generate_optimized_code_with_ollama(
+                api_key=api_key,
+                code=snapshot_code,
+                analysis=analysis,
+                score=score,
+                plan=seed_plan,
+                entrypoint=snapshot_entrypoint,
+                level=level,
+                retry_count=0,
+                rejection_reasons=rejection_reasons,
+                model_name=model,
+            )
+
+        plan = generate_multi_model_verified_candidates(
+            original_code=context.code,
+            analysis=analysis,
+            score=score,
+            entrypoint=context.selected_entrypoint,
+            benchmark_input=context.benchmark_input,
+            models=models,
+            model_candidate_provider=model_candidate_provider,
+            plan=seed_plan,
+            repeat_count=st.session_state.repeat_count,
+            timeout_seconds=st.session_state.timeout_seconds,
+        )
+    else:
+        plan = generate_verified_optimization_candidates(
+            original_code=context.code,
+            analysis=analysis,
+            score=score,
+            entrypoint=context.selected_entrypoint,
+            benchmark_input=context.benchmark_input,
+            api_key=api_key,
+            plan=seed_plan,
+            candidate_provider=candidate_provider,
+            repeat_count=st.session_state.repeat_count,
+            timeout_seconds=st.session_state.timeout_seconds,
+        )
     st.session_state.plan = plan
 
     if plan.generation_notes:
@@ -905,6 +941,55 @@ def _render_step(step: OptimizationStep) -> None:
     )
 
 
+LEVEL_LABELS_UI = {
+    "quick_win": "Quick win",
+    "medium_refactor": "Medium refactor",
+    "advanced": "Advanced",
+}
+
+
+def _render_model_comparison(plan: OptimizationPlan) -> None:
+    """Rank each model by the measured runtime of its best verified rewrite."""
+    rows = getattr(plan, "model_comparison", None)
+    if not rows:
+        return
+
+    st.subheader("Model Comparison")
+    st.caption(
+        "Every model generated candidates in parallel; each candidate was then benchmarked one at a time "
+        "so the runtime and memory numbers stay comparable. Ranked by average runtime, then peak memory."
+    )
+    table = []
+    for row in rows:
+        if row.status == "rejected":
+            table.append(
+                {
+                    "Rank": "-",
+                    "Model": row.model,
+                    "Avg runtime": "-",
+                    "Peak memory": "-",
+                    "Time": "-",
+                    "Space": "-",
+                    "Score": "-",
+                    "Best level": row.note or "No accepted candidate",
+                }
+            )
+            continue
+        table.append(
+            {
+                "Rank": "WINNER" if row.is_winner else "",
+                "Model": row.model,
+                "Avg runtime": f"{row.benchmark_avg_ms:.4f} ms",
+                "Peak memory": f"{row.benchmark_peak_kb:.2f} KB",
+                "Time": row.actual_time or "-",
+                "Space": row.actual_space or "-",
+                "Score": f"{row.score}/100",
+                "Best level": LEVEL_LABELS_UI.get(row.level, row.level or "-"),
+            }
+        )
+    st.dataframe(table, hide_index=True)
+
+
 def _render_optimization_tab(
     analysis: Optional[StaticAnalysisResult],
     score: Optional[ScoreBreakdown],
@@ -984,6 +1069,8 @@ def _render_optimization_tab(
         with st.expander("Rejected candidate reasons and fallback notes"):
             for reason in validation.rejection_reasons:
                 st.write(f"- {reason}")
+
+    _render_model_comparison(plan)
 
     st.subheader("Verified Optimization Candidates")
     level_titles = {
@@ -1479,6 +1566,15 @@ def main() -> None:
         selected_model_id = _selected_ollama_model()
         st.caption(OLLAMA_MODEL_HELP.get(selected_model_label, "Selected Ollama model."))
         st.caption(f"Model id: `{selected_model_id}`")
+        st.checkbox(
+            "Compare all models",
+            key="compare_all_models",
+            help=(
+                f"Generate Optimization Plan asks all {len(OLLAMA_MODEL_OPTIONS)} models in parallel and ranks "
+                "their verified rewrites by measured runtime, then peak memory. Slower, because every candidate "
+                "is benchmarked one at a time so the timings stay comparable."
+            ),
+        )
 
         st.divider()
         st.checkbox(

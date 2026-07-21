@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -116,6 +117,7 @@ class VerifiedOptimizationCandidate:
     source: str = "local"
     score: int = 0
     original_score: int = 0
+    model: str = ""
 
 
 @dataclass
@@ -139,6 +141,7 @@ class OptimizationPlan:
     verified_candidates: List[VerifiedOptimizationCandidate] = field(default_factory=list)
     best_candidate: Optional[VerifiedOptimizationCandidate] = None
     generation_notes: List[str] = field(default_factory=list)
+    model_comparison: List["ModelComparisonRow"] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -1215,6 +1218,25 @@ def _verify_candidate_for_level(
 
 
 CandidateProvider = Callable[[str, List[str]], Tuple[Optional[OptimizedCodeCandidate], Optional[str]]]
+ModelCandidateProvider = Callable[
+    [str, str, List[str]], Tuple[Optional[OptimizedCodeCandidate], Optional[str]]
+]
+
+
+@dataclass
+class ModelComparisonRow:
+    """Best verified candidate produced by a single model."""
+
+    model: str
+    status: str
+    level: str = ""
+    benchmark_avg_ms: float = 0.0
+    benchmark_peak_kb: float = 0.0
+    actual_time: str = ""
+    actual_space: str = ""
+    score: int = 0
+    note: str = ""
+    is_winner: bool = False
 
 
 def _select_best_candidate(candidates: List[VerifiedOptimizationCandidate]) -> Optional[VerifiedOptimizationCandidate]:
@@ -1802,3 +1824,191 @@ def build_optimization_plan(
             f"This verified rewrite improves estimated time but increases estimated space from {verified_plan.validation.original_space} to {verified_plan.validation.candidate_space}.",
         )
     return verified_plan
+
+
+def generate_multi_model_verified_candidates(
+    original_code: str,
+    analysis: StaticAnalysisResult,
+    score: ScoreBreakdown,
+    entrypoint: str,
+    benchmark_input: str,
+    models: List[str],
+    model_candidate_provider: ModelCandidateProvider,
+    plan: Optional[OptimizationPlan] = None,
+    repeat_count: int = 5,
+    timeout_seconds: float = 5.0,
+    generation_timeout_seconds: float = 240.0,
+) -> OptimizationPlan:
+    """Race every model over every level, then rank the verified results.
+
+    Generation is fanned out across models because it is IO-bound on Ollama.
+    Verification is deliberately kept sequential: it measures runtime and peak
+    memory, and concurrent benchmark runs would contend for the same cores and
+    make those numbers incomparable, which are the very numbers we rank on.
+    """
+    working_plan = plan or build_optimization_plan(
+        analysis,
+        score,
+        entrypoint=entrypoint,
+        benchmark_input="",
+        generate_candidates=False,
+    )
+    levels = ("quick_win", "medium_refactor", "advanced")
+    generation_notes: List[str] = []
+
+    original_benchmark: Optional[BenchmarkResult] = None
+    if benchmark_input.strip():
+        original_benchmark = run_benchmark(
+            code=original_code,
+            entrypoint=entrypoint,
+            input_text=benchmark_input,
+            repeat_count=repeat_count,
+            warmup_count=1,
+            timeout_seconds=timeout_seconds,
+            allow_top_level=False,
+        )
+
+    def generate_for_model(model: str) -> Tuple[str, Dict[str, Optional[OptimizedCodeCandidate]], List[str]]:
+        produced: Dict[str, Optional[OptimizedCodeCandidate]] = {}
+        notes: List[str] = []
+        for level in levels:
+            try:
+                candidate, error = model_candidate_provider(model, level, [])
+            except Exception as exc:  # noqa: BLE001 - a bad model must not kill the batch
+                candidate, error = None, f"{model}: {type(exc).__name__}"
+            if error:
+                notes.append(f"{model}: {error}")
+            produced[level] = candidate
+        return model, produced, notes
+
+    generated: Dict[str, Dict[str, Optional[OptimizedCodeCandidate]]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(models))) as executor:
+        futures = {executor.submit(generate_for_model, model): model for model in models}
+        for future in as_completed(futures, timeout=generation_timeout_seconds):
+            model = futures[future]
+            try:
+                name, produced, notes = future.result()
+            except Exception as exc:  # noqa: BLE001
+                generation_notes.append(f"{model}: generation failed ({type(exc).__name__}).")
+                continue
+            generated[name] = produced
+            generation_notes.extend(notes)
+    for model in models:
+        if model not in generated:
+            generation_notes.append(f"{model}: dropped after {generation_timeout_seconds:.0f}s generation timeout.")
+
+    # Verify sequentially so the timing numbers stay comparable across models.
+    verified_candidates: List[VerifiedOptimizationCandidate] = []
+    for model in models:
+        produced = generated.get(model, {})
+        for level in levels:
+            candidate = produced.get(level)
+            if candidate is None:
+                continue
+            verified = _verify_candidate_for_level(
+                original_code=original_code,
+                original_analysis=analysis,
+                original_score=score,
+                candidate=candidate,
+                entrypoint=entrypoint,
+                benchmark_input=benchmark_input,
+                level=level,
+                repeat_count=repeat_count,
+                timeout_seconds=timeout_seconds,
+                original_benchmark=original_benchmark,
+            )
+            verified.model = model
+            verified_candidates.append(verified)
+
+    if not verified_candidates:
+        for level in levels:
+            local_candidate = build_local_candidate_for_level(original_code, analysis, entrypoint, level)
+            if local_candidate is None:
+                continue
+            verified = _verify_candidate_for_level(
+                original_code=original_code,
+                original_analysis=analysis,
+                original_score=score,
+                candidate=local_candidate,
+                entrypoint=entrypoint,
+                benchmark_input=benchmark_input,
+                level=level,
+                repeat_count=repeat_count,
+                timeout_seconds=timeout_seconds,
+                original_benchmark=original_benchmark,
+            )
+            verified.model = "local"
+            verified_candidates.append(verified)
+        if verified_candidates:
+            generation_notes.append("No model returned a candidate; used the local verified optimizer.")
+
+    best_candidate = _select_best_candidate(verified_candidates)
+    working_plan.verified_candidates = verified_candidates
+    working_plan.best_candidate = best_candidate
+    working_plan.model_comparison = _build_model_comparison(verified_candidates, best_candidate)
+    working_plan.validation = _validation_from_best_candidate(analysis, score, best_candidate, verified_candidates)
+    working_plan.generation_notes = list(dict.fromkeys(generation_notes))
+    working_plan.optimized_code = best_candidate.code if best_candidate else None
+    working_plan.safe_rewrite_confidence = 0.84 if best_candidate else 0.0
+    working_plan.rewrite_tests = best_candidate.validation_tests if best_candidate else []
+    working_plan.candidate_source = best_candidate.source if best_candidate else "none"
+    working_plan.candidate_explanation = best_candidate.explanation if best_candidate else ""
+    working_plan.step_by_step_plan = [
+        candidate.acceptance_reason
+        for candidate in verified_candidates
+        if candidate.status in {"accepted", "same_complexity"} and candidate.acceptance_reason
+    ]
+
+    if best_candidate:
+        status_text = "same-complexity reference" if best_candidate.status == "same_complexity" else "verified improvement"
+        working_plan.before_after = (
+            f"Before: estimated {analysis.estimated_time} time and {analysis.estimated_space} space, "
+            f"score {score.score}/100. After: {status_text} from {best_candidate.model or 'local'} with estimated "
+            f"{best_candidate.actual_time} time and {best_candidate.actual_space} space, "
+            f"score {best_candidate.score}/100."
+        )
+    else:
+        working_plan.before_after = (
+            "No verified better rewrite was found for this benchmark input. The original remains the best "
+            "validated version. Try larger or more difficult inputs to evaluate pruning benefits."
+        )
+    return working_plan
+
+
+def _build_model_comparison(
+    candidates: List[VerifiedOptimizationCandidate],
+    best_candidate: Optional[VerifiedOptimizationCandidate],
+) -> List[ModelComparisonRow]:
+    """One row per model: its own best accepted candidate, ranked like the winner."""
+    by_model: Dict[str, List[VerifiedOptimizationCandidate]] = {}
+    for candidate in candidates:
+        by_model.setdefault(candidate.model or "local", []).append(candidate)
+
+    rows: List[ModelComparisonRow] = []
+    for model, model_candidates in by_model.items():
+        best_for_model = _select_best_candidate(model_candidates)
+        if best_for_model is None:
+            rejected = [c for c in model_candidates if c.rejection_reasons]
+            note = rejected[0].rejection_reasons[0] if rejected else "No accepted candidate."
+            rows.append(ModelComparisonRow(model=model, status="rejected", note=note))
+            continue
+        rows.append(
+            ModelComparisonRow(
+                model=model,
+                status=best_for_model.status,
+                level=best_for_model.level,
+                benchmark_avg_ms=best_for_model.benchmark_avg_ms,
+                benchmark_peak_kb=best_for_model.benchmark_peak_kb,
+                actual_time=best_for_model.actual_time,
+                actual_space=best_for_model.actual_space,
+                score=best_for_model.score,
+                is_winner=best_candidate is not None
+                and best_for_model.code == best_candidate.code
+                and model == (best_candidate.model or "local"),
+            )
+        )
+
+    accepted = [row for row in rows if row.status != "rejected"]
+    rejected_rows = [row for row in rows if row.status == "rejected"]
+    accepted.sort(key=lambda row: (row.benchmark_avg_ms, row.benchmark_peak_kb))
+    return accepted + rejected_rows
