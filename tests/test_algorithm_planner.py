@@ -76,7 +76,7 @@ def test_ollama_failure_is_sanitized_and_does_not_leak_key(monkeypatch):
     [
         (
             "model_unavailable",
-            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to qwen3-coder-next, gemma4:31b, rnj-1:8b, ministral-3:8b, or minimax-m3.",
+            "Ollama Cloud could not access any approved model for this API key. Check that the key is active and has access to minimax-m3, gpt-oss:120b, gemma4:31b, nemotron-3-ultra, or gpt-oss:20b.",
         ),
     ],
 )
@@ -321,7 +321,7 @@ def test_algorithm_planner_uses_env_key_without_sidebar_ollama_key_input():
     assert "pending_ollama_api_key" not in app_source
 
 
-def test_algorithm_planner_falls_back_to_gemma_when_qwen_is_unavailable(monkeypatch):
+def test_algorithm_planner_falls_back_to_gptoss_when_minimax_is_unavailable(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
 
     class FakeClient:
@@ -349,7 +349,7 @@ def test_algorithm_planner_falls_back_to_gemma_when_qwen_is_unavailable(monkeypa
         calls.append(model_name)
         assert json_mode
         assert client.host == "https://ollama.com"
-        if model_name == "qwen3-coder-next":
+        if model_name == "minimax-m3":
             raise RuntimeError("this model requires a subscription (status code: 403)")
         return json.dumps(payload)
 
@@ -358,7 +358,7 @@ def test_algorithm_planner_falls_back_to_gemma_when_qwen_is_unavailable(monkeypa
     result = algorithm_planner._generate_with_ollama("Return the input.", "SECRET_TEST_KEY")
 
     assert result["problem_understanding"] == "Fallback worked."
-    assert calls == ["qwen3-coder-next", "gemma4:31b"]
+    assert calls == ["minimax-m3", "gpt-oss:120b"]
 
 
 def test_algorithm_planner_repairs_non_json_ollama_response(monkeypatch):
@@ -404,4 +404,4 @@ def test_model_candidates_ignore_env_override(monkeypatch):
 
     candidates = algorithm_planner._model_candidates()
 
-    assert candidates == ["qwen3-coder-next", "gemma4:31b", "rnj-1:8b", "ministral-3:8b", "minimax-m3"]
+    assert candidates == ["minimax-m3", "gpt-oss:120b", "gemma4:31b", "nemotron-3-ultra", "gpt-oss:20b"]

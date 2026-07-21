@@ -10,21 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-DEFAULT_OLLAMA_MODEL_LABEL = "Qwen3 Coder Next"
-DEFAULT_OLLAMA_MODEL = "qwen3-coder-next"
+DEFAULT_OLLAMA_MODEL_LABEL = "MiniMax M3"
+DEFAULT_OLLAMA_MODEL = "minimax-m3"
 OLLAMA_MODEL_OPTIONS = {
-    "Qwen3 Coder Next": "qwen3-coder-next",
-    "Gemma 4 (31B)": "gemma4:31b",
-    "RNJ-1 (8B)": "rnj-1:8b",
-    "Ministral 3 (8B)": "ministral-3:8b",
     "MiniMax M3": "minimax-m3",
+    "GPT-OSS (120B)": "gpt-oss:120b",
+    "Gemma 4 (31B)": "gemma4:31b",
+    "Nemotron 3 Ultra": "nemotron-3-ultra",
+    "GPT-OSS (20B)": "gpt-oss:20b",
 }
 OLLAMA_MODEL_HELP = {
-    "Qwen3 Coder Next": "Coding-focused language model optimized for agentic coding workflows.",
-    "Gemma 4 (31B)": "Designed to deliver frontier-level performance at each size.",
-    "RNJ-1 (8B)": "Open-weight, dense models optimized for code and STEM.",
-    "Ministral 3 (8B)": "Designed for edge deployment.",
-    "MiniMax M3": "Coding & Agentic Frontier.",
+    "MiniMax M3": "Coding and agentic frontier model. Default candidate generator.",
+    "GPT-OSS (120B)": "Large open-weight model for deeper refactoring passes.",
+    "Gemma 4 (31B)": "Frontier-level performance at a smaller size.",
+    "Nemotron 3 Ultra": "Reasoning-oriented alternative when other models are busy.",
+    "GPT-OSS (20B)": "Fast, cost-efficient fallback for quick candidates.",
 }
 OLLAMA_MODEL_FALLBACKS = tuple(OLLAMA_MODEL_OPTIONS.values())
 OLLAMA_HOST = "https://ollama.com"
@@ -119,7 +119,7 @@ def ollama_error_message(category: str) -> str:
         "quota": "Ollama quota or rate limit was reached. Try again later.",
         "model_unavailable": (
             "Ollama Cloud could not access any approved model for this API key. "
-            "Check that the key is active and has access to qwen3-coder-next, gemma4:31b, rnj-1:8b, ministral-3:8b, or minimax-m3."
+            "Check that the key is active and has access to minimax-m3, gpt-oss:120b, gemma4:31b, nemotron-3-ultra, or gpt-oss:20b."
         ),
         "malformed_response": "Ollama responded, but not in the expected format. Try again.",
         "missing_package": "The Ollama Python SDK is not installed. Install ollama and try again.",
