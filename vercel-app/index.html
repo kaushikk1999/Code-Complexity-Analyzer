@@ -3,192 +3,273 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Complexity Lab — Static Analyzer</title>
+<title>Complexity Lab</title>
 <style>
   :root {
-    --bg: #0e1117; --panel: #161b22; --panel2: #1c232d; --border: #2a323d;
-    --text: #e6edf3; --muted: #9aa7b4; --accent: #6ea8fe; --accent2: #7ee2b8;
-    --warn: #f0b866; --bad: #f2777a; --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --bg: #0b1220; --sidebar: #0d1526; --panel: #111b2e; --panel2: #16233a;
+    --border: #223049; --border2: #2c3f5e; --text: #e8eef6;
+    --muted: #8ea0b8; --heading: #f4f8fd;
+    --accent: #2fd6e6; --accent-ink: #06222a; --grad1: #1c3a63; --grad2: #3a2a63;
+    --good: #7ee2b8; --warn: #f0c674; --bad: #f2777a;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height: 1.5; }
-  header { padding: 28px 20px 8px; text-align: center; }
-  header h1 { margin: 0; font-size: 1.7rem; letter-spacing: -0.02em; }
-  header p { margin: 6px 0 0; color: var(--muted); font-size: 0.92rem; }
-  main { max-width: 980px; margin: 0 auto; padding: 16px 20px 60px; }
-  .grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
-  @media (min-width: 860px) { .grid { grid-template-columns: 1fr 1fr; } }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 6px; }
-  textarea { width: 100%; min-height: 340px; resize: vertical; background: var(--bg);
-    color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
-    font-family: var(--mono); font-size: 0.86rem; }
-  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
-  button { background: var(--accent); color: #08111f; border: 0; border-radius: 8px;
-    padding: 10px 18px; font-weight: 600; font-size: 0.92rem; cursor: pointer; }
-  button:disabled { opacity: 0.55; cursor: default; }
-  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-  .badges { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
-  .badge { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 14px; min-width: 120px; }
-  .badge .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .badge .v { font-size: 1.15rem; font-family: var(--mono); margin-top: 2px; }
-  h3 { font-size: 0.95rem; margin: 18px 0 8px; }
-  .item { border-left: 3px solid var(--border); padding: 8px 12px; margin: 8px 0;
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text);
+    font-family: "Source Sans 3",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .app { display: grid; grid-template-columns: 340px 1fr; min-height: 100vh; }
+  @media (max-width: 820px) { .app { grid-template-columns: 1fr; } }
+
+  /* ---- sidebar ---- */
+  aside { background: var(--sidebar); border-right: 1px solid var(--border);
+    padding: 26px 22px 40px; }
+  aside h2 { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -0.01em; }
+  aside .sub { color: var(--muted); font-size: 0.82rem; margin: 2px 0 22px; }
+  aside label { display: block; font-size: 0.9rem; font-weight: 600; margin: 18px 0 6px; }
+  select, .field { width: 100%; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border2); border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .btn { background: var(--panel); color: var(--text); border: 1px solid var(--border2);
+    border-radius: 8px; padding: 11px; font-size: 0.9rem; font-weight: 600; cursor: pointer; text-align: center; }
+  .btn:hover { border-color: var(--accent); }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 26px 0; }
+  .note { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+  .note b { color: var(--text); }
+  .chkline { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--muted); font-size: 0.86rem; }
+  .chkline input { accent-color: var(--accent); }
+
+  /* ---- main ---- */
+  main { padding: 22px 30px 60px; max-width: 1100px; }
+  .hero { border-radius: 16px; padding: 34px 36px;
+    background: linear-gradient(120deg, var(--grad1), var(--grad2));
+    border: 1px solid var(--border2); }
+  .hero h1 { margin: 0; font-size: 3.1rem; font-weight: 800; letter-spacing: -0.02em; color: #fff; }
+  @media (max-width: 640px) { .hero h1 { font-size: 2.1rem; } }
+  .hero p { color: #cdd8e8; font-size: 1.05rem; margin: 12px 0 20px; }
+  .chips { display: flex; gap: 12px; flex-wrap: wrap; }
+  .chip { background: rgba(8,16,30,0.55); border: 1px solid var(--border2);
+    border-radius: 999px; padding: 8px 16px; font-size: 0.82rem; font-weight: 700; color: #dbe6f5; }
+
+  .tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--border); margin: 26px 0 22px; }
+  .tab { padding: 10px 2px; font-size: 0.98rem; font-weight: 600; color: var(--muted);
+    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  h3.section { font-size: 1.5rem; font-weight: 800; margin: 4px 0 18px; color: var(--heading); }
+
+  label.big { font-size: 0.95rem; color: var(--text); display: block; margin-bottom: 8px; }
+  textarea { width: 100%; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border2); border-radius: 10px; padding: 14px;
+    font-family: var(--mono); font-size: 0.9rem; resize: vertical; }
+  #question { min-height: 240px; }
+  #code { min-height: 300px; }
+  .cta { width: 100%; margin-top: 16px; background: var(--accent); color: var(--accent-ink);
+    border: 0; border-radius: 10px; padding: 14px; font-size: 1rem; font-weight: 700; cursor: pointer; }
+  .cta:disabled { opacity: 0.6; cursor: default; }
+
+  .result { margin-top: 20px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; }
+  .result h4 { margin: 0 0 6px; font-size: 1.1rem; }
+  .result .muted { color: var(--muted); font-size: 0.9rem; }
+  .badges { display: flex; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
+  .badge { background: var(--panel2); border: 1px solid var(--border2); border-radius: 10px;
+    padding: 12px 16px; min-width: 120px; }
+  .badge .k { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .badge .v { font-size: 1.2rem; font-family: var(--mono); margin-top: 3px; color: var(--accent); }
+  .h5 { font-size: 0.95rem; margin: 18px 0 8px; font-weight: 700; }
+  .pill { display: inline-block; font-size: 0.68rem; background: var(--panel); border: 1px solid var(--border2);
+    border-radius: 999px; padding: 2px 9px; color: var(--muted); margin-left: 6px; vertical-align: middle; }
+  .item { border-left: 3px solid var(--border2); padding: 9px 13px; margin: 8px 0;
     background: var(--panel2); border-radius: 0 8px 8px 0; }
-  .item .t { font-weight: 600; font-size: 0.9rem; }
-  .item .d { color: var(--muted); font-size: 0.84rem; margin-top: 2px; }
+  .item .t { font-weight: 600; font-size: 0.92rem; }
+  .item .d { color: var(--muted); font-size: 0.85rem; margin-top: 3px; }
   .sev-high { border-left-color: var(--bad); }
   .sev-medium { border-left-color: var(--warn); }
-  .sev-low { border-left-color: var(--accent2); }
+  .sev-low { border-left-color: var(--good); }
   .mono { font-family: var(--mono); }
-  .muted { color: var(--muted); font-size: 0.85rem; }
-  .empty { color: var(--muted); text-align: center; padding: 40px 10px; }
-  .err { color: var(--bad); font-family: var(--mono); font-size: 0.85rem; white-space: pre-wrap; }
-  .pill { display: inline-block; font-size: 0.7rem; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 999px; padding: 2px 8px; color: var(--muted); margin-left: 6px; }
-  footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 10px 20px 40px; }
-  a { color: var(--accent); }
+  .err { color: var(--bad); font-family: var(--mono); font-size: 0.88rem; white-space: pre-wrap; }
+  .infobox { background: var(--panel2); border: 1px dashed var(--border2); border-radius: 10px;
+    padding: 18px 20px; color: var(--muted); font-size: 0.92rem; line-height: 1.6; }
+  .infobox b { color: var(--text); }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
-<header>
-  <h1>⚡ Complexity Lab</h1>
-  <p>Static time &amp; space complexity analysis for Python — AST-based, runs serverless on Vercel.</p>
-</header>
-<main>
-  <div class="grid">
-    <div class="card">
-      <label for="code">Python source</label>
-      <textarea id="code" spellcheck="false"></textarea>
-      <div class="row">
-        <button id="run">Analyze</button>
-        <button id="sample" class="ghost">Load sample</button>
-        <span id="hint" class="muted"></span>
+<div class="app">
+  <!-- ================= SIDEBAR ================= -->
+  <aside>
+    <h2>Complexity Lab</h2>
+    <div class="sub">Controls</div>
+
+    <label for="template">Example template</label>
+    <select id="template"></select>
+
+    <div class="btns">
+      <button class="btn" id="load">Load Example</button>
+      <button class="btn" id="reset">Reset</button>
+    </div>
+
+    <hr />
+    <div class="note">
+      <b>Static deployment.</b> This is the Vercel-hosted build. The
+      <b>Code Analyzer</b> runs the full AST static analysis in a serverless
+      function — no code execution needed.
+    </div>
+
+    <label style="margin-top:22px">Unavailable in static mode</label>
+    <div class="chkline"><input type="checkbox" disabled /> Empirical benchmarking</div>
+    <div class="chkline"><input type="checkbox" disabled /> Docker isolation</div>
+    <div class="chkline"><input type="checkbox" disabled /> LLM optimization plans</div>
+    <div class="note" style="margin-top:10px">
+      These need a persistent server / Docker / an LLM key and run only in the
+      full Streamlit app.
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main>
+    <div class="hero">
+      <h1>Complexity Lab</h1>
+      <p>Interview-ready Python complexity, benchmark, and optimization analysis.</p>
+      <div class="chips">
+        <span class="chip">AST static analysis</span>
+        <span class="chip">Empirical benchmarks</span>
+        <span class="chip">Interview coaching</span>
+        <span class="chip">Best-effort execution guardrails</span>
       </div>
     </div>
-    <div class="card" id="out">
-      <div class="empty">Paste code and hit <b>Analyze</b>.</div>
+
+    <div class="tabs">
+      <div class="tab" data-tab="planner">Algorithm Planner</div>
+      <div class="tab active" data-tab="analyzer">Code Analyzer</div>
     </div>
-  </div>
-</main>
-<footer>
-  Static analysis only (no code execution, benchmarking, or LLM). Powered by the project's <span class="mono">analyzer</span> package.
-</footer>
+
+    <!-- ---- Algorithm Planner ---- -->
+    <section id="tab-planner" class="hidden">
+      <h3 class="section">Algorithm Optimization Planner</h3>
+      <label class="big" for="question">Enter your coding question</label>
+      <textarea id="question" placeholder="Paste a coding interview problem, constraints, examples, and expected output."></textarea>
+      <button class="cta" id="plan">Generate Optimization Plan</button>
+      <div class="result">
+        <h4>Waiting for analysis</h4>
+        <div class="infobox" style="margin-top:12px">
+          The optimization planner uses an <b>LLM backend</b> to turn a natural-language
+          problem into a step-by-step plan. That can't run on Vercel's serverless model,
+          so it's disabled in this static build. <br /><br />
+          👉 Use the <b>Code Analyzer</b> tab — paste working Python and get a full
+          complexity breakdown, anti-patterns, and optimization targets, all computed
+          server-side with zero setup.
+        </div>
+      </div>
+    </section>
+
+    <!-- ---- Code Analyzer ---- -->
+    <section id="tab-analyzer">
+      <h3 class="section">Static Code Analyzer</h3>
+      <label class="big" for="code">Paste Python code</label>
+      <textarea id="code" placeholder="def two_sum(nums, target): ..."></textarea>
+      <button class="cta" id="run">Analyze</button>
+      <div id="out"></div>
+    </section>
+  </main>
+</div>
 
 <script>
-const SAMPLE = `def has_duplicate(nums):
-    for i in range(len(nums)):
-        for j in range(len(nums)):
-            if i != j and nums[i] == nums[j]:
-                return True
-    return False
-
-def binary_search(arr, target):
-    lo, hi = 0, len(arr) - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if arr[mid] == target:
-            return mid
-        elif arr[mid] < target:
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return -1`;
+const EXAMPLES = {"Two Sum - Brute Force": {"code": "def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []\n"}, "Duplicate Detector - List Membership": {"code": "def find_duplicates(values):\n    seen = []\n    duplicates = []\n    for value in values:\n        if value in seen and value not in duplicates:\n            duplicates.append(value)\n        seen.append(value)\n    return duplicates\n"}, "Sorted Scores": {"code": "def top_scores(scores, k):\n    ordered = sorted(scores, reverse=True)\n    return ordered[:k]\n"}, "Recursive Fibonacci": {"code": "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n"}, "Binary Search": {"code": "def binary_search(values, target):\n    left, right = 0, len(values) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if values[mid] == target:\n            return mid\n        if values[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n"}, "Sliding Window Max Sum": {"code": "def max_window_sum(values, k):\n    window_sum = sum(values[:k])\n    best = window_sum\n    left = 0\n    for right in range(k, len(values)):\n        window_sum += values[right]\n        window_sum -= values[left]\n        left += 1\n        best = max(best, window_sum)\n    return best\n"}, "Top K With Heap": {"code": "from heapq import heappush, heappop\n\ndef top_k(values, k):\n    heap = []\n    for value in values:\n        heappush(heap, value)\n        if len(heap) > k:\n            heappop(heap)\n    return sorted(heap, reverse=True)\n"}, "Memoized Fibonacci": {"code": "from functools import lru_cache\n\n@lru_cache(maxsize=None)\ndef fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n"}, "Graph BFS": {"code": "from collections import deque\n\ndef bfs(graph, start):\n    visited = set([start])\n    queue = deque([start])\n    order = []\n    while queue:\n        node = queue.popleft()\n        order.append(node)\n        for neighbor in graph.get(node, []):\n            if neighbor not in visited:\n                visited.add(neighbor)\n                queue.append(neighbor)\n    return order\n"}};
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
-
-function sevClass(s) {
+const sevClass = (s) => {
   const v = String(s || "").toLowerCase();
   if (v.includes("high") || v.includes("crit")) return "sev-high";
   if (v.includes("med") || v.includes("warn")) return "sev-medium";
   return "sev-low";
-}
+};
 
+// ---- sidebar templates ----
+const tSel = $("template");
+Object.keys(EXAMPLES).forEach(name => {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name; tSel.appendChild(o);
+});
+function loadExample() {
+  const ex = EXAMPLES[tSel.value];
+  if (ex) { $("code").value = ex.code; switchTab("analyzer"); analyze(); }
+}
+$("load").addEventListener("click", loadExample);
+$("reset").addEventListener("click", () => { $("code").value = ""; $("out").innerHTML = ""; });
+
+// ---- tabs ----
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t =>
+    t.classList.toggle("active", t.dataset.tab === name));
+  $("tab-planner").classList.toggle("hidden", name !== "planner");
+  $("tab-analyzer").classList.toggle("hidden", name !== "analyzer");
+}
+document.querySelectorAll(".tab").forEach(t =>
+  t.addEventListener("click", () => switchTab(t.dataset.tab)));
+
+// ---- render analysis ----
 function list(title, arr, render) {
   if (!arr || !arr.length) return "";
-  return `<h3>${esc(title)} <span class="pill">${arr.length}</span></h3>` + arr.map(render).join("");
+  return `<div class="h5">${esc(title)} <span class="pill">${arr.length}</span></div>` + arr.map(render).join("");
 }
-
 function render(r) {
-  if (!r.valid) {
-    return `<div class="err">✖ ${esc(r.parse_error || "Could not parse the code.")}</div>`;
-  }
+  if (!r.valid) return `<div class="result"><div class="err">✖ ${esc(r.parse_error || "Could not parse the code.")}</div></div>`;
   const conf = Math.round((r.confidence || 0) * 100);
-  let html = `<div class="badges">
-    <div class="badge"><div class="k">Time</div><div class="v">${esc(r.estimated_time)}</div></div>
-    <div class="badge"><div class="k">Space</div><div class="v">${esc(r.estimated_space)}</div></div>
-    <div class="badge"><div class="k">Confidence</div><div class="v">${conf}%</div></div>
-  </div>`;
-
-  html += list("Functions", r.functions, f => `
+  let h = `<div class="result">
+    <div class="badges">
+      <div class="badge"><div class="k">Time</div><div class="v">${esc(r.estimated_time)}</div></div>
+      <div class="badge"><div class="k">Space</div><div class="v">${esc(r.estimated_space)}</div></div>
+      <div class="badge"><div class="k">Confidence</div><div class="v">${conf}%</div></div>
+    </div>`;
+  h += list("Functions", r.functions, f => `
     <div class="item">
       <div class="t">${esc(f.name)} <span class="pill">line ${f.lineno}</span></div>
       <div class="d mono">time ${esc(f.estimated_time)} · space ${esc(f.estimated_space)} · conf ${Math.round((f.confidence||0)*100)}%</div>
       ${f.caveats && f.caveats.length ? `<div class="d">${f.caveats.map(esc).join("<br>")}</div>` : ""}
     </div>`);
-
-  html += list("Anti-patterns", r.anti_patterns, a => `
+  h += list("Anti-patterns", r.anti_patterns, a => `
     <div class="item ${sevClass(a.severity)}">
       <div class="t">${esc(a.name)} <span class="pill">${esc(a.severity)}</span></div>
       <div class="d">${esc(a.message)}</div>
       ${a.suggestion ? `<div class="d">💡 ${esc(a.suggestion)}</div>` : ""}
     </div>`);
-
-  html += list("Line findings", r.line_findings, l => `
+  h += list("Line findings", r.line_findings, l => `
     <div class="item ${sevClass(l.severity)}">
       <div class="t">L${l.line}: ${esc(l.title)} <span class="pill">${esc(l.category)}</span></div>
       <div class="d">${esc(l.detail)}</div>
       ${l.suggestion ? `<div class="d">💡 ${esc(l.suggestion)}</div>` : ""}
     </div>`);
-
-  html += list("Algorithm patterns", r.algorithm_patterns, p => `
+  h += list("Algorithm patterns", r.algorithm_patterns, p => `
     <div class="item">
       <div class="t">${esc(p.name)} <span class="pill">${Math.round((p.confidence||0)*100)}%</span></div>
       ${p.interview_note ? `<div class="d">${esc(p.interview_note)}</div>` : ""}
     </div>`);
-
-  html += list("Optimization targets", r.optimization_targets, o => `
+  h += list("Optimization targets", r.optimization_targets, o => `
     <div class="item">
       <div class="t">${esc(o.title)} <span class="pill">impact ${esc(o.impact)} · effort ${esc(o.effort)}</span></div>
       <div class="d">${esc(o.rationale)}</div>
     </div>`);
-
-  if (r.caveats && r.caveats.length) {
-    html += `<h3>Caveats</h3><div class="muted">${r.caveats.map(esc).join("<br>")}</div>`;
-  }
-  return html;
+  if (r.caveats && r.caveats.length) h += `<div class="h5">Caveats</div><div class="note">${r.caveats.map(esc).join("<br>")}</div>`;
+  return h + `</div>`;
 }
-
 async function analyze() {
   const code = $("code").value;
-  const btn = $("run");
-  const out = $("out");
-  if (!code.trim()) { out.innerHTML = `<div class="empty">Nothing to analyze yet.</div>`; return; }
-  btn.disabled = true; $("hint").textContent = "Analyzing…";
+  if (!code.trim()) { $("out").innerHTML = `<div class="result"><div class="muted">Nothing to analyze yet.</div></div>`; return; }
+  const btn = $("run"); btn.disabled = true; btn.textContent = "Analyzing…";
   try {
     const res = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     });
-    const data = await res.json();
-    out.innerHTML = render(data);
+    $("out").innerHTML = render(await res.json());
   } catch (e) {
-    out.innerHTML = `<div class="err">Request failed: ${esc(e.message)}</div>`;
-  } finally {
-    btn.disabled = false; $("hint").textContent = "";
-  }
+    $("out").innerHTML = `<div class="result"><div class="err">Request failed: ${esc(e.message)}</div></div>`;
+  } finally { btn.disabled = false; btn.textContent = "Analyze"; }
 }
-
 $("run").addEventListener("click", analyze);
-$("sample").addEventListener("click", () => { $("code").value = SAMPLE; analyze(); });
-$("code").addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") analyze();
-});
+$("code").addEventListener("keydown", (e) => { if ((e.metaKey||e.ctrlKey) && e.key === "Enter") analyze(); });
 </script>
 </body>
 </html>
