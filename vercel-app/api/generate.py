@@ -18,13 +18,13 @@ from http.server import BaseHTTPRequestHandler
 
 OLLAMA_HOST = "https://ollama.com"
 DEFAULT_MODEL = "gemma4:31b-cloud"
-# Allowlisted free Ollama Cloud models the UI can pick from.
+# Allowlisted Ollama Cloud models verified free on the free tier.
+# (GLM / Kimi / Qwen / DeepSeek cloud tags require a paid subscription.)
 ALLOWED_MODELS = {
-    "glm-5.2:cloud",
-    "kimi-k3:cloud",
     "gemma4:31b-cloud",
-    "qwen3.5:cloud",
-    "glm-5.1:cloud",
+    "gpt-oss:120b-cloud",
+    "gpt-oss:20b-cloud",
+    "minimax-m3:cloud",
 }
 TIMEOUT = 55  # seconds; keep under the function maxDuration
 
