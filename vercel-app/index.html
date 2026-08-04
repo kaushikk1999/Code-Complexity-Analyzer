@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Complexity Lab — Static Analyzer</title>
+<style>
+  :root {
+    --bg: #0e1117; --panel: #161b22; --panel2: #1c232d; --border: #2a323d;
+    --text: #e6edf3; --muted: #9aa7b4; --accent: #6ea8fe; --accent2: #7ee2b8;
+    --warn: #f0b866; --bad: #f2777a; --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height: 1.5; }
+  header { padding: 28px 20px 8px; text-align: center; }
+  header h1 { margin: 0; font-size: 1.7rem; letter-spacing: -0.02em; }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: 0.92rem; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px 20px 60px; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  @media (min-width: 860px) { .grid { grid-template-columns: 1fr 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 6px; }
+  textarea { width: 100%; min-height: 340px; resize: vertical; background: var(--bg);
+    color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    font-family: var(--mono); font-size: 0.86rem; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button { background: var(--accent); color: #08111f; border: 0; border-radius: 8px;
+    padding: 10px 18px; font-weight: 600; font-size: 0.92rem; cursor: pointer; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .badges { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
+  .badge { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; min-width: 120px; }
+  .badge .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .badge .v { font-size: 1.15rem; font-family: var(--mono); margin-top: 2px; }
+  h3 { font-size: 0.95rem; margin: 18px 0 8px; }
+  .item { border-left: 3px solid var(--border); padding: 8px 12px; margin: 8px 0;
+    background: var(--panel2); border-radius: 0 8px 8px 0; }
+  .item .t { font-weight: 600; font-size: 0.9rem; }
+  .item .d { color: var(--muted); font-size: 0.84rem; margin-top: 2px; }
+  .sev-high { border-left-color: var(--bad); }
+  .sev-medium { border-left-color: var(--warn); }
+  .sev-low { border-left-color: var(--accent2); }
+  .mono { font-family: var(--mono); }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 10px; }
+  .err { color: var(--bad); font-family: var(--mono); font-size: 0.85rem; white-space: pre-wrap; }
+  .pill { display: inline-block; font-size: 0.7rem; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 8px; color: var(--muted); margin-left: 6px; }
+  footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 10px 20px 40px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ Complexity Lab</h1>
+  <p>Static time &amp; space complexity analysis for Python — AST-based, runs serverless on Vercel.</p>
+</header>
+<main>
+  <div class="grid">
+    <div class="card">
+      <label for="code">Python source</label>
+      <textarea id="code" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="run">Analyze</button>
+        <button id="sample" class="ghost">Load sample</button>
+        <span id="hint" class="muted"></span>
+      </div>
+    </div>
+    <div class="card" id="out">
+      <div class="empty">Paste code and hit <b>Analyze</b>.</div>
+    </div>
+  </div>
+</main>
+<footer>
+  Static analysis only (no code execution, benchmarking, or LLM). Powered by the project's <span class="mono">analyzer</span> package.
+</footer>
+
+<script>
+const SAMPLE = `def has_duplicate(nums):
+    for i in range(len(nums)):
+        for j in range(len(nums)):
+            if i != j and nums[i] == nums[j]:
+                return True
+    return False
+
+def binary_search(arr, target):
+    lo, hi = 0, len(arr) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1`;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+
+function sevClass(s) {
+  const v = String(s || "").toLowerCase();
+  if (v.includes("high") || v.includes("crit")) return "sev-high";
+  if (v.includes("med") || v.includes("warn")) return "sev-medium";
+  return "sev-low";
+}
+
+function list(title, arr, render) {
+  if (!arr || !arr.length) return "";
+  return `<h3>${esc(title)} <span class="pill">${arr.length}</span></h3>` + arr.map(render).join("");
+}
+
+function render(r) {
+  if (!r.valid) {
+    return `<div class="err">✖ ${esc(r.parse_error || "Could not parse the code.")}</div>`;
+  }
+  const conf = Math.round((r.confidence || 0) * 100);
+  let html = `<div class="badges">
+    <div class="badge"><div class="k">Time</div><div class="v">${esc(r.estimated_time)}</div></div>
+    <div class="badge"><div class="k">Space</div><div class="v">${esc(r.estimated_space)}</div></div>
+    <div class="badge"><div class="k">Confidence</div><div class="v">${conf}%</div></div>
+  </div>`;
+
+  html += list("Functions", r.functions, f => `
+    <div class="item">
+      <div class="t">${esc(f.name)} <span class="pill">line ${f.lineno}</span></div>
+      <div class="d mono">time ${esc(f.estimated_time)} · space ${esc(f.estimated_space)} · conf ${Math.round((f.confidence||0)*100)}%</div>
+      ${f.caveats && f.caveats.length ? `<div class="d">${f.caveats.map(esc).join("<br>")}</div>` : ""}
+    </div>`);
+
+  html += list("Anti-patterns", r.anti_patterns, a => `
+    <div class="item ${sevClass(a.severity)}">
+      <div class="t">${esc(a.name)} <span class="pill">${esc(a.severity)}</span></div>
+      <div class="d">${esc(a.message)}</div>
+      ${a.suggestion ? `<div class="d">💡 ${esc(a.suggestion)}</div>` : ""}
+    </div>`);
+
+  html += list("Line findings", r.line_findings, l => `
+    <div class="item ${sevClass(l.severity)}">
+      <div class="t">L${l.line}: ${esc(l.title)} <span class="pill">${esc(l.category)}</span></div>
+      <div class="d">${esc(l.detail)}</div>
+      ${l.suggestion ? `<div class="d">💡 ${esc(l.suggestion)}</div>` : ""}
+    </div>`);
+
+  html += list("Algorithm patterns", r.algorithm_patterns, p => `
+    <div class="item">
+      <div class="t">${esc(p.name)} <span class="pill">${Math.round((p.confidence||0)*100)}%</span></div>
+      ${p.interview_note ? `<div class="d">${esc(p.interview_note)}</div>` : ""}
+    </div>`);
+
+  html += list("Optimization targets", r.optimization_targets, o => `
+    <div class="item">
+      <div class="t">${esc(o.title)} <span class="pill">impact ${esc(o.impact)} · effort ${esc(o.effort)}</span></div>
+      <div class="d">${esc(o.rationale)}</div>
+    </div>`);
+
+  if (r.caveats && r.caveats.length) {
+    html += `<h3>Caveats</h3><div class="muted">${r.caveats.map(esc).join("<br>")}</div>`;
+  }
+  return html;
+}
+
+async function analyze() {
+  const code = $("code").value;
+  const btn = $("run");
+  const out = $("out");
+  if (!code.trim()) { out.innerHTML = `<div class="empty">Nothing to analyze yet.</div>`; return; }
+  btn.disabled = true; $("hint").textContent = "Analyzing…";
+  try {
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    out.innerHTML = render(data);
+  } catch (e) {
+    out.innerHTML = `<div class="err">Request failed: ${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; $("hint").textContent = "";
+  }
+}
+
+$("run").addEventListener("click", analyze);
+$("sample").addEventListener("click", () => { $("code").value = SAMPLE; analyze(); });
+$("code").addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") analyze();
+});
+</script>
+</body>
+</html>
