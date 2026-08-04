@@ -117,6 +117,18 @@
       <button class="btn" id="reset">Reset</button>
     </div>
 
+    <label for="model" style="margin-top:22px">LLM model</label>
+    <select id="model">
+      <option value="gemma4:31b-cloud">Gemma 4 · 31B (cloud)</option>
+      <option value="glm-5.2:cloud">GLM-5.2 (cloud)</option>
+      <option value="kimi-k3:cloud">Kimi K3 (cloud)</option>
+      <option value="qwen3.5:cloud">Qwen 3.5 (cloud)</option>
+      <option value="glm-5.1:cloud">GLM-5.1 (cloud)</option>
+    </select>
+    <div class="note" style="margin-top:6px">
+      Used for AI generation in both tabs. Model id: <span class="mono" id="modelId">gemma4:31b-cloud</span>
+    </div>
+
     <hr />
     <div class="note">
       <b>Vercel build.</b> The <b>Code Analyzer</b> runs full AST static analysis,
@@ -324,15 +336,18 @@ async function callGenerate(payload, btn, outEl, label) {
   } finally { btn.disabled = false; btn.textContent = orig; }
 }
 
+const modelSel = $("model");
+modelSel.addEventListener("change", () => { $("modelId").textContent = modelSel.value; });
+
 $("plan").addEventListener("click", () => {
   const q = $("question").value.trim();
   if (!q) { $("planOut").innerHTML = `<div class="result"><div class="muted">Enter a coding question first.</div></div>`; return; }
-  callGenerate({ mode: "plan", question: q }, $("plan"), $("planOut"), "Generating plan…");
+  callGenerate({ mode: "plan", question: q, model: modelSel.value }, $("plan"), $("planOut"), "Generating plan…");
 });
 $("optimize").addEventListener("click", () => {
   const code = $("code").value.trim();
   if (!code) { $("optOut").innerHTML = `<div class="result"><div class="muted">Paste code in the box above first.</div></div>`; return; }
-  callGenerate({ mode: "optimize", code }, $("optimize"), $("optOut"), "Optimizing…");
+  callGenerate({ mode: "optimize", code, model: modelSel.value }, $("optimize"), $("optOut"), "Optimizing…");
 });
 </script>
 </body>

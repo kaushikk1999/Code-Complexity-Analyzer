@@ -17,7 +17,15 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 OLLAMA_HOST = "https://ollama.com"
-MODEL = "gemma4:31b-cloud"
+DEFAULT_MODEL = "gemma4:31b-cloud"
+# Allowlisted free Ollama Cloud models the UI can pick from.
+ALLOWED_MODELS = {
+    "glm-5.2:cloud",
+    "kimi-k3:cloud",
+    "gemma4:31b-cloud",
+    "qwen3.5:cloud",
+    "glm-5.1:cloud",
+}
 TIMEOUT = 55  # seconds; keep under the function maxDuration
 
 PLAN_SYSTEM = (
@@ -41,10 +49,10 @@ OPTIMIZE_SYSTEM = (
 )
 
 
-def _ollama_chat(api_key: str, system: str, user: str) -> str:
+def _ollama_chat(api_key: str, model: str, system: str, user: str) -> str:
     body = json.dumps(
         {
-            "model": MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -79,6 +87,10 @@ def _run(raw_body: bytes) -> dict:
     except (ValueError, TypeError):
         data = {}
 
+    model = (data.get("model") or "").strip()
+    if model not in ALLOWED_MODELS:
+        model = DEFAULT_MODEL
+
     mode = (data.get("mode") or "plan").strip()
     if mode == "optimize":
         code = (data.get("code") or "").strip()
@@ -92,7 +104,7 @@ def _run(raw_body: bytes) -> dict:
         system, user = PLAN_SYSTEM, f"Coding problem:\n\n{question[:8000]}"
 
     try:
-        text = _ollama_chat(api_key, system, user)
+        text = _ollama_chat(api_key, model, system, user)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "ignore")[:300] if exc.fp else ""
         return {"ok": False, "error": f"Ollama Cloud error {exc.code}. {detail}"}
@@ -103,7 +115,7 @@ def _run(raw_body: bytes) -> dict:
 
     if not text:
         return {"ok": False, "error": "Ollama returned an empty response."}
-    return {"ok": True, "model": MODEL, "text": text}
+    return {"ok": True, "model": model, "text": text}
 
 
 class handler(BaseHTTPRequestHandler):
@@ -135,4 +147,5 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         configured = bool(os.getenv("OLLAMA_API_KEY", "").strip())
-        self._send(200, {"ok": True, "model": MODEL, "key_configured": configured})
+        self._send(200, {"ok": True, "default_model": DEFAULT_MODEL,
+                         "models": sorted(ALLOWED_MODELS), "key_configured": configured})
