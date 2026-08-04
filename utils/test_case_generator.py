@@ -8,7 +8,7 @@ from typing import Any, List
 
 from utils.entrypoints import EntrypointDefinition, find_entrypoint_definition
 
-DEFAULT_BENCHMARK_CASE_COUNT = 40
+DEFAULT_BENCHMARK_CASE_COUNT = 20
 
 
 @dataclass

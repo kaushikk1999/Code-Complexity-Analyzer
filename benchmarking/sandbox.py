@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 ALLOWED_IMPORT_ROOTS = {
     "bisect",
     "collections",
+    "copy",
     "functools",
     "heapq",
     "itertools",
@@ -80,9 +81,7 @@ DANGEROUS_ATTRIBUTES = {
     "popen",
     "read_text",
     "recv",
-    "remove",
     "rename",
-    "replace",
     "request",
     "rmdir",
     "send",

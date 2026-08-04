@@ -1,0 +1,21 @@
+# Render Blueprint — one-click deploy for Complexity Lab (Streamlit).
+# Deploy: push this repo to GitHub, then in Render choose
+# "New +" -> "Blueprint" and point it at the repo. Render reads this file.
+services:
+  - type: web
+    name: complexity-lab
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    # Streamlit must bind to Render's injected $PORT on 0.0.0.0.
+    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      # Optional Ollama Cloud coaching. Set the value in the Render dashboard
+      # (Environment tab) instead of committing it. Leave unset to run the app
+      # fully without Ollama.
+      - key: OLLAMA_API_KEY
+        sync: false

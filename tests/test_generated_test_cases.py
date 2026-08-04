@@ -96,7 +96,7 @@ def test_sorted_array_to_bst_generated_batch_supplies_nums():
         repeat_count=1,
     )
     assert result.success, result.error
-    assert result.input_description == "40 benchmark case(s)"
+    assert result.input_description == f"{DEFAULT_BENCHMARK_CASE_COUNT} benchmark case(s)"
 
 
 def test_string_annotation_generated_batch_supplies_strings():

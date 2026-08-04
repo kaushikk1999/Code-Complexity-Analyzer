@@ -20,14 +20,21 @@ def _fixtures():
 def test_all_models_are_asked_and_generation_runs_in_parallel():
     analysis, score = _fixtures()
     models = ["model-a", "model-b", "model-c", "model-d"]
-    seen_threads = set()
     calls = []
     lock = threading.Lock()
+    # Every model must be in flight at once for the barrier to release. If
+    # generation were sequential the first model would block here forever and
+    # the barrier would raise BrokenBarrierError on timeout.
+    barrier = threading.Barrier(len(models), timeout=10)
+    barrier_ok = []
 
     def provider(model, level, rejection_reasons):
         with lock:
+            first_call_for_model = all(m != model for m, _ in calls)
             calls.append((model, level))
-            seen_threads.add(threading.get_ident())
+        if first_call_for_model:
+            barrier.wait()
+            barrier_ok.append(model)
         return OptimizedCodeCandidate(source="ollama", code=FAST, explanation="hash map", level=level), None
 
     plan = generate_multi_model_verified_candidates(
@@ -44,8 +51,8 @@ def test_all_models_are_asked_and_generation_runs_in_parallel():
 
     assert {model for model, _ in calls} == set(models)
     assert len(calls) == len(models) * 3
-    # Generation is fanned out, so more than one worker thread must have run.
-    assert len(seen_threads) > 1
+    # All models cleared the barrier, so all of them were generating at once.
+    assert sorted(barrier_ok) == sorted(models)
     assert {row.model for row in plan.model_comparison} == set(models)
 
 

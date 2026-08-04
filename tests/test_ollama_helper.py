@@ -268,7 +268,7 @@ def test_generate_optimized_code_uses_env_api_key(monkeypatch):
     assert candidate is not None
 
 
-def test_generate_test_cases_with_ollama_requires_40_valid_cases(monkeypatch):
+def test_generate_test_cases_with_ollama_requires_full_valid_case_count(monkeypatch):
     secret = "SECRET_TEST_KEY"
     definition = EntrypointDefinition(name="solve", qualified_name="solve", args=["value"])
 
@@ -312,7 +312,7 @@ def test_generate_test_cases_with_ollama_rejects_short_case_list(monkeypatch):
     )
 
     assert cases == []
-    assert "expected 40" in error
+    assert f"expected {DEFAULT_BENCHMARK_CASE_COUNT}" in error
 
 
 @pytest.mark.parametrize(

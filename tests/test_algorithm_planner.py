@@ -284,7 +284,7 @@ def test_benchmark_planner_solution_uses_peak_runtime_label_only():
     assert "Average Runtime" not in PLANNER_OUTPUT_LABELS
 
 
-def test_planner_rejects_fewer_than_40_cases(monkeypatch):
+def test_planner_rejects_fewer_than_required_cases(monkeypatch):
     def short_payload(question: str, api_key: str):
         return {
             "problem_understanding": "Too few cases.",
@@ -302,7 +302,7 @@ def test_planner_rejects_fewer_than_40_cases(monkeypatch):
     result = generate_algorithm_optimization_plan("Return the value.", "fake-key")
 
     assert not result.valid
-    assert "40 are required" in result.error
+    assert f"{DEFAULT_BENCHMARK_CASE_COUNT} are required" in result.error
     assert not result.runtime.measured
 
 

@@ -820,7 +820,10 @@ def _render_static_tab(analysis: Optional[StaticAnalysisResult]) -> None:
                     key=f"use_generated_case_{index}",
                 ):
                     _set_benchmark_input(case.benchmark_input, st.session_state.entrypoint)
-                    st.success("Custom benchmark input updated. It will be appended after the 40 generated cases.")
+                    st.success(
+                        "Custom benchmark input updated. It will be appended after the "
+                        f"{DEFAULT_BENCHMARK_CASE_COUNT} generated cases."
+                    )
                     _rerun()
 
     if analysis.anti_patterns:
@@ -1359,7 +1362,11 @@ def _render_algorithm_planner_result(result: AlgorithmPlannerResult) -> None:
         )
     with complexity_cols[3]:
         st.markdown(
-            metric_card("Peak Memory", result.runtime.memory_display_value, "Measured across 40 generated cases"),
+            metric_card(
+                "Peak Memory",
+                result.runtime.memory_display_value,
+                f"Measured across {DEFAULT_BENCHMARK_CASE_COUNT} generated cases",
+            ),
             unsafe_allow_html=True,
         )
     st.caption(result.complexity_note)
