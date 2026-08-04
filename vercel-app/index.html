@@ -91,6 +91,15 @@
     padding: 18px 20px; color: var(--muted); font-size: 0.92rem; line-height: 1.6; }
   .infobox b { color: var(--text); }
   .hidden { display: none; }
+  .mdh { font-weight: 800; color: var(--heading); margin: 16px 0 6px; }
+  .mdh.h1 { font-size: 1.4rem; } .mdh.h2 { font-size: 1.15rem; } .mdh.h3 { font-size: 1rem; }
+  .result p { margin: 8px 0; font-size: 0.92rem; }
+  .result ul { margin: 8px 0; padding-left: 20px; font-size: 0.92rem; }
+  .result li { margin: 4px 0; }
+  pre.code { background: #0a1220; border: 1px solid var(--border2); border-radius: 8px;
+    padding: 14px; overflow-x: auto; font-family: var(--mono); font-size: 0.84rem; line-height: 1.5; }
+  code.ic { background: #0a1220; border: 1px solid var(--border2); border-radius: 5px;
+    padding: 1px 5px; font-family: var(--mono); font-size: 0.85em; }
 </style>
 </head>
 <body>
@@ -110,18 +119,18 @@
 
     <hr />
     <div class="note">
-      <b>Static deployment.</b> This is the Vercel-hosted build. The
-      <b>Code Analyzer</b> runs the full AST static analysis in a serverless
-      function — no code execution needed.
+      <b>Vercel build.</b> The <b>Code Analyzer</b> runs full AST static analysis,
+      and both tabs use AI code generation via <b>Ollama Cloud</b>
+      (<span class="mono">gemma4:31b-cloud</span>).
     </div>
 
     <label style="margin-top:22px">Unavailable in static mode</label>
     <div class="chkline"><input type="checkbox" disabled /> Empirical benchmarking</div>
     <div class="chkline"><input type="checkbox" disabled /> Docker isolation</div>
-    <div class="chkline"><input type="checkbox" disabled /> LLM optimization plans</div>
     <div class="note" style="margin-top:10px">
-      These need a persistent server / Docker / an LLM key and run only in the
-      full Streamlit app.
+      Benchmarking and Docker isolation need a persistent server and run only in
+      the full Streamlit app. AI generation requires <span class="mono">OLLAMA_API_KEY</span>
+      set on the deployment.
     </div>
   </aside>
 
@@ -149,17 +158,7 @@
       <label class="big" for="question">Enter your coding question</label>
       <textarea id="question" placeholder="Paste a coding interview problem, constraints, examples, and expected output."></textarea>
       <button class="cta" id="plan">Generate Optimization Plan</button>
-      <div class="result">
-        <h4>Waiting for analysis</h4>
-        <div class="infobox" style="margin-top:12px">
-          The optimization planner uses an <b>LLM backend</b> to turn a natural-language
-          problem into a step-by-step plan. That can't run on Vercel's serverless model,
-          so it's disabled in this static build. <br /><br />
-          👉 Use the <b>Code Analyzer</b> tab — paste working Python and get a full
-          complexity breakdown, anti-patterns, and optimization targets, all computed
-          server-side with zero setup.
-        </div>
-      </div>
+      <div id="planOut"></div>
     </section>
 
     <!-- ---- Code Analyzer ---- -->
@@ -169,6 +168,8 @@
       <textarea id="code" placeholder="def two_sum(nums, target): ..."></textarea>
       <button class="cta" id="run">Analyze</button>
       <div id="out"></div>
+      <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Generate optimized code (AI)</button>
+      <div id="optOut"></div>
     </section>
   </main>
 </div>
@@ -270,6 +271,69 @@ async function analyze() {
 }
 $("run").addEventListener("click", analyze);
 $("code").addEventListener("keydown", (e) => { if ((e.metaKey||e.ctrlKey) && e.key === "Enter") analyze(); });
+
+// ---- minimal markdown renderer (headings, bold, inline + fenced code, lists) ----
+function md(src) {
+  const parts = String(src || "").split(/```/);
+  let out = "";
+  parts.forEach((chunk, i) => {
+    if (i % 2 === 1) { // fenced code block
+      const body = chunk.replace(/^[a-zA-Z0-9]*\n/, "");
+      out += `<pre class="code"><code>${esc(body.replace(/\n$/, ""))}</code></pre>`;
+      return;
+    }
+    chunk.split(/\n{2,}/).forEach(block => {
+      const t = block.trim();
+      if (!t) return;
+      if (/^#{1,6}\s/.test(t)) {
+        const lvl = t.match(/^#+/)[0].length;
+        out += `<div class="mdh h${lvl}">${inline(t.replace(/^#+\s/, ""))}</div>`;
+      } else if (/^[-*]\s/m.test(t)) {
+        out += "<ul>" + t.split(/\n/).map(l => l.replace(/^[-*]\s/, ""))
+          .filter(Boolean).map(l => `<li>${inline(l)}</li>`).join("") + "</ul>";
+      } else {
+        out += `<p>${inline(t).replace(/\n/g, "<br>")}</p>`;
+      }
+    });
+  });
+  return out;
+}
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code class="ic">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+
+async function callGenerate(payload, btn, outEl, label) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = label;
+  outEl.innerHTML = `<div class="result"><div class="muted">Generating with gemma4:31b-cloud… this can take ~10–40s.</div></div>`;
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      outEl.innerHTML = `<div class="result"><div class="err">${esc(data.error || "Generation failed.")}</div></div>`;
+    } else {
+      outEl.innerHTML = `<div class="result"><div class="muted" style="margin-bottom:10px">model: ${esc(data.model)}</div>${md(data.text)}</div>`;
+    }
+  } catch (e) {
+    outEl.innerHTML = `<div class="result"><div class="err">Request failed: ${esc(e.message)}</div></div>`;
+  } finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+$("plan").addEventListener("click", () => {
+  const q = $("question").value.trim();
+  if (!q) { $("planOut").innerHTML = `<div class="result"><div class="muted">Enter a coding question first.</div></div>`; return; }
+  callGenerate({ mode: "plan", question: q }, $("plan"), $("planOut"), "Generating plan…");
+});
+$("optimize").addEventListener("click", () => {
+  const code = $("code").value.trim();
+  if (!code) { $("optOut").innerHTML = `<div class="result"><div class="muted">Paste code in the box above first.</div></div>`; return; }
+  callGenerate({ mode: "optimize", code }, $("optimize"), $("optOut"), "Optimizing…");
+});
 </script>
 </body>
 </html>

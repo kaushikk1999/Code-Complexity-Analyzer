@@ -3,6 +3,9 @@
   "functions": {
     "api/analyze.py": {
       "includeFiles": "api/analyzer/**"
+    },
+    "api/generate.py": {
+      "maxDuration": 60
     }
   }
 }
