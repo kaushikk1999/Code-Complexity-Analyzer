@@ -187,7 +187,7 @@
       <div id="out"></div>
       <button class="cta" id="bench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks &amp; graph</button>
       <div id="benchOut"></div>
-      <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Generate optimized code (AI)</button>
+      <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Optimize with all models → rank Top 3</button>
       <div id="optOut"></div>
     </section>
   </main>
@@ -356,11 +356,80 @@ $("plan").addEventListener("click", () => {
   if (!q) { $("planOut").innerHTML = `<div class="result"><div class="muted">Enter a coding question first.</div></div>`; return; }
   callGenerate({ mode: "plan", question: q, model: modelSel.value }, $("plan"), $("planOut"), "Generating plan…");
 });
-$("optimize").addEventListener("click", () => {
+// ---- multi-LLM optimize + rank pipeline ----
+function metricRow(label, val) {
+  return `<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:0.85rem">
+    <span class="muted">${esc(label)}</span><span class="mono">${esc(val)}</span></div>`;
+}
+function baselineCard(b) {
+  const d = b.dynamic, s = b.static;
+  return `<div class="result" style="border-color:var(--warn)">
+    <h4>Baseline — original <span class="mono">${esc(b.entrypoint)}</span></h4>
+    <div class="badges" style="margin-top:10px">
+      <div class="badge"><div class="k">Time</div><div class="v">${d.time_ms} ms</div></div>
+      <div class="badge"><div class="k">Peak mem</div><div class="v">${d.peak_kb} KB</div></div>
+      <div class="badge"><div class="k">Time cx</div><div class="v">${esc(s.time_complexity)}</div></div>
+      <div class="badge"><div class="k">Space cx</div><div class="v">${esc(s.space_complexity)}</div></div>
+    </div>
+    ${metricRow("Measured growth", d.fit)}
+    ${metricRow("Lines of code", s.loc)}
+    ${metricRow("Cyclomatic complexity", s.cyclomatic)}
+    ${metricRow("Readability", s.readability + " / 100")}
+    ${metricRow("Maintainability", s.maintainability + " / 100")}
+  </div>`;
+}
+function candidateCard(c, rank) {
+  const d = c.dynamic, s = c.static;
+  const medal = ["🥇", "🥈", "🥉"][rank - 1] || "";
+  const timeCls = c.time_improvement_pct > 0 ? "var(--good)" : "var(--bad)";
+  return `<div class="result" style="border-color:var(--accent)">
+    <h4>${medal} #${rank} · <span class="mono">${esc(c.model)}</span>
+      <span class="pill">score ${c.score}</span>
+      <span class="pill">correctness ${(c.correctness*100).toFixed(0)}%</span></h4>
+    <div class="badges" style="margin-top:10px">
+      <div class="badge"><div class="k">Time</div><div class="v">${d.time_ms} ms</div></div>
+      <div class="badge"><div class="k">Peak mem</div><div class="v">${d.peak_kb} KB</div></div>
+      <div class="badge"><div class="k">Time cx</div><div class="v">${esc(s.time_complexity)}</div></div>
+      <div class="badge"><div class="k">Space cx</div><div class="v">${esc(s.space_complexity)}</div></div>
+    </div>
+    <div style="margin:8px 0">
+      ${metricRow("⏱ Time improvement", (c.time_improvement_pct>=0?"+":"") + c.time_improvement_pct + "% vs original")}
+      ${metricRow("🧠 Memory improvement", (c.mem_improvement_pct>=0?"+":"") + c.mem_improvement_pct + "% vs original")}
+      ${metricRow("Readability", s.readability + " / 100")}
+      ${metricRow("Maintainability", s.maintainability + " / 100")}
+      ${metricRow("Lines of code", s.loc)}
+      ${metricRow("Cyclomatic complexity", s.cyclomatic)}
+    </div>
+    <div class="h5">Why this was selected</div>
+    <p>${esc(c.explanation || "Optimized rewrite.")}</p>
+    <div class="h5">Optimized code</div>
+    <pre class="code"><code>${esc(c.code)}</code></pre>
+  </div>`;
+}
+async function runOptimize() {
   const code = $("code").value.trim();
-  if (!code) { $("optOut").innerHTML = `<div class="result"><div class="muted">Paste code in the box above first.</div></div>`; return; }
-  callGenerate({ mode: "optimize", code, model: modelSel.value }, $("optimize"), $("optOut"), "Optimizing…");
-});
+  const btn = $("optimize"), out = $("optOut");
+  if (!code) { out.innerHTML = `<div class="result"><div class="muted">Paste code above first.</div></div>`; return; }
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = "Benchmarking + running 4 models in parallel…";
+  out.innerHTML = `<div class="result"><div class="muted">1) Baseline benchmark → 2) parallel generation across all free models → 3) validate + rank. This can take 30–90s…</div></div>`;
+  try {
+    const res = await fetch("/api/optimize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const d = await res.json();
+    if (!d.ok) { out.innerHTML = `<div class="result"><div class="err">${esc(d.error || "Optimize failed.")}</div></div>`; return; }
+    let html = `<div class="h5">Models: ${d.models_tried.map(esc).join(", ")} · ${d.all_count} valid candidate(s)</div>`;
+    html += baselineCard(d.baseline);
+    html += `<div class="h5" style="margin-top:16px">🏆 Top ${d.top.length} optimized solutions</div>`;
+    html += d.top.map((c, i) => candidateCard(c, i + 1)).join("");
+    if (d.failures && d.failures.length) {
+      html += `<div class="result"><div class="h5">Skipped</div>` +
+        d.failures.map(f => `<div class="d muted">${esc(f.model)}: ${esc(f.error)}</div>`).join("") + `</div>`;
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = `<div class="result"><div class="err">Request failed: ${esc(e.message)}</div></div>`;
+  } finally { btn.disabled = false; btn.textContent = orig; }
+}
+$("optimize").addEventListener("click", runOptimize);
 
 // ---- benchmark + SVG line chart ----
 function lineChart(points, key, color, ylabel) {
