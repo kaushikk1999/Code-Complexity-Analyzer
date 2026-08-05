@@ -100,6 +100,13 @@
     padding: 14px; overflow-x: auto; font-family: var(--mono); font-size: 0.84rem; line-height: 1.5; }
   code.ic { background: #0a1220; border: 1px solid var(--border2); border-radius: 5px;
     padding: 1px 5px; font-family: var(--mono); font-size: 0.85em; }
+  .tblwrap { max-height: 320px; overflow: auto; border: 1px solid var(--border2); border-radius: 8px; }
+  table.btable { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  table.btable th { position: sticky; top: 0; background: var(--panel2); color: var(--muted);
+    text-align: right; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border2); }
+  table.btable th:first-child, table.btable td:first-child { text-align: left; }
+  table.btable td { text-align: right; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+  table.btable tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
 </style>
 </head>
 <body>
@@ -378,6 +385,15 @@ function lineChart(points, key, color, ylabel) {
   </svg>`;
 }
 
+function benchTable(points) {
+  const rows = points.map((p, i) => `<tr>
+    <td>${i + 1}</td><td class="mono">${p.n}</td>
+    <td class="mono">${p.ms.toFixed(4)}</td><td class="mono">${p.kb.toFixed(1)}</td></tr>`).join("");
+  return `<div class="tblwrap"><table class="btable">
+    <thead><tr><th>#</th><th>Input size (n)</th><th>Time (ms)</th><th>Peak memory (KB)</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
 async function runBenchmark(code, btn, outEl) {
   if (!code || !code.trim()) { outEl.innerHTML = `<div class="result"><div class="muted">No code to benchmark.</div></div>`; return; }
   const orig = btn.textContent; btn.disabled = true; btn.textContent = "Running 30 benchmarks…";
@@ -395,6 +411,7 @@ async function runBenchmark(code, btn, outEl) {
       </div>
       <div class="h5">⏱ Runtime</div>${lineChart(d.points, "ms", "#2fd6e6", "time (ms)")}
       <div class="h5">🧠 Peak memory</div>${lineChart(d.points, "kb", "#7ee2b8", "memory (KB)")}
+      <div class="h5">📋 Measurements (${d.points.length} runs)</div>${benchTable(d.points)}
     </div>`;
   } catch (e) {
     outEl.innerHTML = `<div class="result"><div class="err">Request failed: ${esc(e.message)}</div></div>`;
