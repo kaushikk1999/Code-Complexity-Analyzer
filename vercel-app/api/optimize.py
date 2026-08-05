@@ -131,8 +131,9 @@ def _benchmark(code: str) -> dict:
     pts = res["points"]
     tail = pts[-5:] if len(pts) >= 5 else pts
     time_ms = round(sum(p["ms"] for p in tail) / len(tail), 4)
+    cpu_ms = round(sum(p.get("cpu_ms", 0.0) for p in tail) / len(tail), 4)
     peak_kb = round(max(p["kb"] for p in pts), 1)
-    return {"ok": True, "time_ms": time_ms, "peak_kb": peak_kb,
+    return {"ok": True, "time_ms": time_ms, "cpu_ms": cpu_ms, "peak_kb": peak_kb,
             "total_ms": res["total_ms"], "fit": res["fit"], "entrypoint": res["entrypoint"]}
 
 

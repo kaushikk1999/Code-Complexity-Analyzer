@@ -113,21 +113,25 @@ def _run(raw_body: bytes) -> dict:
             args = _build_args(func, size)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"Could not build inputs: {exc}"}
-        # time: best of 3 short repeats
+        # time: best of 3 short repeats (wall clock + CPU time)
         best = None
+        best_cpu = None
         tracemalloc.start()
         try:
             for _ in range(3):
-                t0 = time.perf_counter()
+                t0, c0 = time.perf_counter(), time.process_time()
                 func(*args)
                 dt = time.perf_counter() - t0
-                best = dt if best is None else min(best, dt)
+                dc = time.process_time() - c0
+                if best is None or dt < best:
+                    best, best_cpu = dt, dc
         except Exception as exc:  # noqa: BLE001
             tracemalloc.stop()
             return {"ok": False, "error": f"Call failed at size {size}: {exc}"}
         peak = tracemalloc.get_traced_memory()[1]
         tracemalloc.stop()
-        points.append({"n": size, "ms": round(best * 1000, 4), "kb": round(peak / 1024, 1)})
+        points.append({"n": size, "ms": round(best * 1000, 4),
+                       "cpu_ms": round(best_cpu * 1000, 4), "kb": round(peak / 1024, 1)})
         if best > PER_POINT_BUDGET or (time.perf_counter() - started) > TOTAL_BUDGET:
             break
 

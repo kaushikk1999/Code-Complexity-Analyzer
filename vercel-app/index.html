@@ -371,6 +371,7 @@ function baselineCard(b) {
       <div class="badge"><div class="k">Time cx</div><div class="v">${esc(s.time_complexity)}</div></div>
       <div class="badge"><div class="k">Space cx</div><div class="v">${esc(s.space_complexity)}</div></div>
     </div>
+    ${metricRow("CPU time", d.cpu_ms + " ms")}
     ${metricRow("Measured growth", d.fit)}
     ${metricRow("Lines of code", s.loc)}
     ${metricRow("Cyclomatic complexity", s.cyclomatic)}
@@ -395,6 +396,7 @@ function candidateCard(c, rank) {
     <div style="margin:8px 0">
       ${metricRow("⏱ Time improvement", (c.time_improvement_pct>=0?"+":"") + c.time_improvement_pct + "% vs original")}
       ${metricRow("🧠 Memory improvement", (c.mem_improvement_pct>=0?"+":"") + c.mem_improvement_pct + "% vs original")}
+      ${metricRow("🖥 CPU time", d.cpu_ms + " ms")}
       ${metricRow("Readability", s.readability + " / 100")}
       ${metricRow("Maintainability", s.maintainability + " / 100")}
       ${metricRow("Lines of code", s.loc)}
@@ -457,9 +459,9 @@ function lineChart(points, key, color, ylabel) {
 function benchTable(points) {
   const rows = points.map((p, i) => `<tr>
     <td>${i + 1}</td><td class="mono">${p.n}</td>
-    <td class="mono">${p.ms.toFixed(4)}</td><td class="mono">${p.kb.toFixed(1)}</td></tr>`).join("");
+    <td class="mono">${p.ms.toFixed(4)}</td><td class="mono">${(p.cpu_ms ?? 0).toFixed(4)}</td><td class="mono">${p.kb.toFixed(1)}</td></tr>`).join("");
   return `<div class="tblwrap"><table class="btable">
-    <thead><tr><th>#</th><th>Input size (n)</th><th>Time (ms)</th><th>Peak memory (KB)</th></tr></thead>
+    <thead><tr><th>#</th><th>Input size (n)</th><th>Time (ms)</th><th>CPU (ms)</th><th>Peak memory (KB)</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
