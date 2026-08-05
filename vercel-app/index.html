@@ -135,13 +135,10 @@
       (<span class="mono">gemma4:31b-cloud</span>).
     </div>
 
-    <label style="margin-top:22px">Unavailable in static mode</label>
-    <div class="chkline"><input type="checkbox" disabled /> Empirical benchmarking</div>
-    <div class="chkline"><input type="checkbox" disabled /> Docker isolation</div>
-    <div class="note" style="margin-top:10px">
-      Benchmarking and Docker isolation need a persistent server and run only in
-      the full Streamlit app. AI generation requires <span class="mono">OLLAMA_API_KEY</span>
-      set on the deployment.
+    <div class="note" style="margin-top:16px">
+      <b>Benchmarks</b> execute the code across 30 input sizes and graph runtime +
+      peak memory. Works locally; best-effort on serverless. Docker isolation is
+      full-app only. AI generation needs <span class="mono">OLLAMA_API_KEY</span>.
     </div>
   </aside>
 
@@ -170,6 +167,8 @@
       <textarea id="question" placeholder="Paste a coding interview problem, constraints, examples, and expected output."></textarea>
       <button class="cta" id="plan">Generate Optimization Plan</button>
       <div id="planOut"></div>
+      <button class="cta hidden" id="planBench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks on the reference solution</button>
+      <div id="planBenchOut"></div>
     </section>
 
     <!-- ---- Code Analyzer ---- -->
@@ -179,6 +178,8 @@
       <textarea id="code" placeholder="def two_sum(nums, target): ..."></textarea>
       <button class="cta" id="run">Analyze</button>
       <div id="out"></div>
+      <button class="cta" id="bench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks &amp; graph</button>
+      <div id="benchOut"></div>
       <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Generate optimized code (AI)</button>
       <div id="optOut"></div>
     </section>
@@ -329,6 +330,11 @@ async function callGenerate(payload, btn, outEl, label) {
       outEl.innerHTML = `<div class="result"><div class="err">${esc(data.error || "Generation failed.")}</div></div>`;
     } else {
       outEl.innerHTML = `<div class="result"><div class="muted" style="margin-bottom:10px">model: ${esc(data.model)}</div>${md(data.text)}</div>`;
+      if (payload.mode === "plan") {
+        const m = data.text.match(/```python\s*([\s\S]*?)```/i);
+        lastPlanCode = m ? m[1].trim() : "";
+        $("planBench").classList.toggle("hidden", !lastPlanCode);
+      }
     }
   } catch (e) {
     outEl.innerHTML = `<div class="result"><div class="err">Request failed: ${esc(e.message)}</div></div>`;
@@ -348,6 +354,58 @@ $("optimize").addEventListener("click", () => {
   if (!code) { $("optOut").innerHTML = `<div class="result"><div class="muted">Paste code in the box above first.</div></div>`; return; }
   callGenerate({ mode: "optimize", code, model: modelSel.value }, $("optimize"), $("optOut"), "Optimizing…");
 });
+
+// ---- benchmark + SVG line chart ----
+function lineChart(points, key, color, ylabel) {
+  const W = 560, H = 240, pad = 46;
+  const xs = points.map(p => p.n), ys = points.map(p => p[key]);
+  const xmax = Math.max(...xs), ymax = Math.max(...ys, 0.0001);
+  const sx = n => pad + (n / xmax) * (W - pad - 12);
+  const sy = v => H - pad - (v / ymax) * (H - pad - 14);
+  const path = points.map((p, i) => `${i ? "L" : "M"}${sx(p.n).toFixed(1)},${sy(p[key]).toFixed(1)}`).join(" ");
+  const dots = points.map(p => `<circle cx="${sx(p.n).toFixed(1)}" cy="${sy(p[key]).toFixed(1)}" r="2.6" fill="${color}"/>`).join("");
+  const yt = [0, 0.5, 1].map(f => { const v = ymax * f, y = sy(v);
+    return `<line x1="${pad}" y1="${y}" x2="${W-12}" y2="${y}" stroke="var(--border2)" stroke-dasharray="3 3"/>`+
+           `<text x="${pad-6}" y="${y+3}" text-anchor="end" fill="var(--muted)" font-size="10">${v.toFixed(v<10?2:0)}</text>`; }).join("");
+  const xt = [0, 0.5, 1].map(f => { const n = Math.round(xmax * f), x = sx(n);
+    return `<text x="${x}" y="${H-pad+16}" text-anchor="middle" fill="var(--muted)" font-size="10">${n}</text>`; }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px">
+    <text x="${pad}" y="16" fill="var(--muted)" font-size="11">${ylabel} vs input size (n)</text>
+    ${yt}${xt}
+    <line x1="${pad}" y1="${H-pad}" x2="${W-12}" y2="${H-pad}" stroke="var(--border2)"/>
+    <line x1="${pad}" y1="14" x2="${pad}" y2="${H-pad}" stroke="var(--border2)"/>
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>${dots}
+  </svg>`;
+}
+
+async function runBenchmark(code, btn, outEl) {
+  if (!code || !code.trim()) { outEl.innerHTML = `<div class="result"><div class="muted">No code to benchmark.</div></div>`; return; }
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = "Running 30 benchmarks…";
+  outEl.innerHTML = `<div class="result"><div class="muted">Executing the code across 30 input sizes…</div></div>`;
+  try {
+    const res = await fetch("/api/benchmark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const d = await res.json();
+    if (!d.ok) { outEl.innerHTML = `<div class="result"><div class="err">${esc(d.error || "Benchmark failed.")}</div></div>`; return; }
+    outEl.innerHTML = `<div class="result">
+      <div class="badges">
+        <div class="badge"><div class="k">Entrypoint</div><div class="v">${esc(d.entrypoint)}</div></div>
+        <div class="badge"><div class="k">Runs</div><div class="v">${d.runs}</div></div>
+        <div class="badge"><div class="k">Total time</div><div class="v">${d.total_ms} ms</div></div>
+        <div class="badge"><div class="k">Measured growth</div><div class="v">${esc(d.fit)}</div></div>
+      </div>
+      <div class="h5">⏱ Runtime</div>${lineChart(d.points, "ms", "#2fd6e6", "time (ms)")}
+      <div class="h5">🧠 Peak memory</div>${lineChart(d.points, "kb", "#7ee2b8", "memory (KB)")}
+    </div>`;
+  } catch (e) {
+    outEl.innerHTML = `<div class="result"><div class="err">Request failed: ${esc(e.message)}</div></div>`;
+  } finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+$("bench").addEventListener("click", () => runBenchmark($("code").value, $("bench"), $("benchOut")));
+
+// Planner: pull the first ```python block from the generated plan and benchmark it.
+let lastPlanCode = "";
+$("planBench").addEventListener("click", () => runBenchmark(lastPlanCode, $("planBench"), $("planBenchOut")));
 </script>
 </body>
 </html>
