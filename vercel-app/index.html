@@ -478,11 +478,15 @@ async function runBenchmark(code, btn, outEl) {
     const res = await fetch("/api/benchmark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
     const d = await res.json();
     if (!d.ok) { outEl.innerHTML = `<div class="result"><div class="err">${esc(d.error || "Benchmark failed.")}</div></div>`; return; }
+    const peakKb = Math.max(...d.points.map(p => p.kb));
+    const maxTimeMs = d.points[d.points.length - 1].ms;
     outEl.innerHTML = `<div class="result">
       <div class="badges">
         <div class="badge"><div class="k">Entrypoint</div><div class="v">${esc(d.entrypoint)}</div></div>
         <div class="badge"><div class="k">Runs</div><div class="v">${d.runs}</div></div>
         <div class="badge"><div class="k">Total time</div><div class="v">${d.total_ms} ms</div></div>
+        <div class="badge"><div class="k">Time @ max n</div><div class="v">${maxTimeMs.toFixed(3)} ms</div></div>
+        <div class="badge"><div class="k">Peak memory</div><div class="v">${peakKb.toFixed(1)} KB</div></div>
         <div class="badge"><div class="k">Measured growth</div><div class="v">${esc(d.fit)}</div></div>
       </div>
       <div class="h5">⏱ Runtime</div>${lineChart(d.points, "ms", "#2fd6e6", "time (ms)")}
