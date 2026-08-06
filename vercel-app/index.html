@@ -91,17 +91,9 @@
     padding: 18px 20px; color: var(--muted); font-size: 0.92rem; line-height: 1.6; }
   .infobox b { color: var(--text); }
   .hidden { display: none; }
-  .actions3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; margin-top: 4px; }
-  @media (max-width: 900px) { .actions3 { grid-template-columns: 1fr; } }
-  .acol { min-width: 0; }
-  .acol .cta { margin-top: 12px; }
-  .acol .result { margin-top: 12px; }
-  .acol pre.code { font-size: 0.72rem; }
-  .acol .badge { min-width: 0; }
-  .acol svg { max-width: 100% !important; }
-  .acol .badges { gap: 8px; }
-  .acol .badge { padding: 8px 10px; }
-  .acol .badge .v { font-size: 0.95rem; }
+  .actions3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; margin-top: 4px; }
+  @media (max-width: 640px) { .actions3 { grid-template-columns: 1fr; } }
+  .actions3 .cta { margin-top: 12px; }
   .mdh { font-weight: 800; color: var(--heading); margin: 16px 0 6px; }
   .mdh.h1 { font-size: 1.4rem; } .mdh.h2 { font-size: 1.15rem; } .mdh.h3 { font-size: 1rem; }
   .result p { margin: 8px 0; font-size: 0.92rem; }
@@ -195,19 +187,13 @@
       <label class="big" for="code">Paste Python code</label>
       <textarea id="code" placeholder="def two_sum(nums, target): ..."></textarea>
       <div class="actions3">
-        <div class="acol">
-          <button class="cta" id="run">Analyze</button>
-          <div id="out"></div>
-        </div>
-        <div class="acol">
-          <button class="cta" id="bench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks &amp; graph</button>
-          <div id="benchOut"></div>
-        </div>
-        <div class="acol">
-          <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Optimize → Top 3</button>
-          <div id="optOut"></div>
-        </div>
+        <button class="cta" id="run">Analyze</button>
+        <button class="cta" id="bench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks &amp; graph</button>
+        <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Optimize → Top 3</button>
       </div>
+      <div id="out"></div>
+      <div id="benchOut"></div>
+      <div id="optOut"></div>
     </section>
   </main>
 </div>
