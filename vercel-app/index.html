@@ -1,203 +1,268 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Complexity Lab</title>
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Complexity Lab | Master Algorithmic Complexity</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+tailwind.config = { darkMode: "class", theme: { extend: {
+  colors: {
+    "background": "#05070f", "surface": "#0a0f1d", "surface-dim": "#0a0e1a",
+    "surface-bright": "#1a2438", "surface-variant": "#1a2438",
+    "surface-container": "#141c2e", "surface-container-low": "#111828",
+    "surface-container-high": "#161f33", "surface-container-highest": "#202c42",
+    "primary": "#38bdf8", "on-primary": "#001f2e", "primary-container": "#0e4d6e",
+    "secondary": "#88b4cc", "tertiary": "#c8a0f0", "on-surface": "#f1f5f9",
+    "on-background": "#e0e8f0", "on-surface-variant": "#a0b4c4",
+    "outline": "#4a6070", "outline-variant": "#2a3a48", "error": "#ff6b6b"
+  },
+  fontFamily: { headline:["Inter","sans-serif"], display:["Inter","sans-serif"],
+    body:["Inter","sans-serif"], label:["Inter","sans-serif"], mono:["JetBrains Mono","monospace"] }
+}}}
+</script>
 <style>
+  /* ---- design effects (from new theme) ---- */
+  .glass-sidebar { background: rgba(10,15,29,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid rgba(255,255,255,0.05); }
+  .glass-panel { background: rgba(22,31,51,0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); transition: all 0.3s ease; }
+  .hero-card { background: linear-gradient(135deg,#1e3a8a 0%,#312e81 100%); }
+  .btn-analyze { background-color:#2dd4bf; color:#022c22; transition:all .3s ease; box-shadow:0 0 15px rgba(45,212,191,.2); }
+  .btn-analyze:hover { box-shadow:0 0 35px rgba(45,212,191,.6); transform:translateY(-2px) scale(1.02); }
+  .btn-analyze:disabled { opacity:.6; transform:none; box-shadow:none; }
+  .btn-outline { background:transparent; border:1px solid #0f766e; color:#2dd4bf; transition:all .3s ease; }
+  .btn-outline:hover { background:rgba(45,212,191,.1); border-color:#2dd4bf; box-shadow:0 0 25px rgba(45,212,191,.3); transform:translateY(-2px) scale(1.02); }
+  .btn-outline:disabled { opacity:.6; transform:none; box-shadow:none; }
+  @keyframes breathe { 0%{transform:scale(1);box-shadow:0 0 20px rgba(56,189,248,.05)} 50%{transform:scale(1.005);box-shadow:0 0 30px rgba(56,189,248,.15)} 100%{transform:scale(1);box-shadow:0 0 20px rgba(56,189,248,.05)} }
+  @media (prefers-reduced-motion: no-preference) { .animate-breathe { animation: breathe 8s infinite ease-in-out; } }
+  ::-webkit-scrollbar { width:8px; } ::-webkit-scrollbar-track { background:#05070f; }
+  ::-webkit-scrollbar-thumb { background:#1a2438; border-radius:4px; } ::-webkit-scrollbar-thumb:hover { background:#38bdf8; }
+  .fade-in-up { opacity:0; transform:translateY(24px); transition:opacity .6s ease-out, transform .6s ease-out; }
+  .fade-in-up.is-visible { opacity:1; transform:translateY(0); }
+  @media (prefers-reduced-motion: reduce) { .fade-in-up { transition:none; opacity:1; transform:none; } .btn-analyze,.btn-outline{transition:none} .btn-analyze:hover,.btn-outline:hover{transform:none} .tab-indicator{transition:none} }
+  body.editor-focused .dim-target { opacity:.4; filter:blur(2px); transition:all .4s ease; }
+  body:not(.editor-focused) .dim-target { opacity:1; filter:blur(0); transition:all .4s ease; }
+  .editor-container { position:relative; z-index:50; transition:all .4s ease; }
+  body.editor-focused .editor-container { box-shadow:0 0 50px rgba(56,189,248,.2); }
+  .tab-indicator { transition: transform .3s cubic-bezier(.4,0,.2,1), width .3s cubic-bezier(.4,0,.2,1); }
+  .tab-btn.active { color:#38bdf8; }
+
+  /* ---- result components (from working app) ---- */
   :root {
-    --bg: #0b1220; --sidebar: #0d1526; --panel: #111b2e; --panel2: #16233a;
-    --border: #223049; --border2: #2c3f5e; --text: #e8eef6;
-    --muted: #8ea0b8; --heading: #f4f8fd;
-    --accent: #2fd6e6; --accent-ink: #06222a; --grad1: #1c3a63; --grad2: #3a2a63;
-    --good: #7ee2b8; --warn: #f0c674; --bad: #f2777a;
-    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --bg:#0b1220; --panel:#111b2e; --panel2:#16233a; --border:#223049; --border2:#2c3f5e;
+    --text:#e8eef6; --muted:#8ea0b8; --heading:#f4f8fd; --accent:#2fd6e6; --accent2:#7ee2b8;
+    --good:#7ee2b8; --warn:#f0c674; --bad:#f2777a;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
-  body { background: var(--bg); color: var(--text);
-    font-family: "Source Sans 3",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  .app { display: grid; grid-template-columns: 340px 1fr; min-height: 100vh; }
-  @media (max-width: 820px) { .app { grid-template-columns: 1fr; } }
-
-  /* ---- sidebar ---- */
-  aside { background: var(--sidebar); border-right: 1px solid var(--border);
-    padding: 26px 22px 40px; }
-  aside h2 { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -0.01em; }
-  aside .sub { color: var(--muted); font-size: 0.82rem; margin: 2px 0 22px; }
-  aside label { display: block; font-size: 0.9rem; font-weight: 600; margin: 18px 0 6px; }
-  select, .field { width: 100%; background: var(--panel); color: var(--text);
-    border: 1px solid var(--border2); border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
-  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
-  .btn { background: var(--panel); color: var(--text); border: 1px solid var(--border2);
-    border-radius: 8px; padding: 11px; font-size: 0.9rem; font-weight: 600; cursor: pointer; text-align: center; }
-  .btn:hover { border-color: var(--accent); }
-  hr { border: 0; border-top: 1px solid var(--border); margin: 26px 0; }
-  .note { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
-  .note b { color: var(--text); }
-  .chkline { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--muted); font-size: 0.86rem; }
-  .chkline input { accent-color: var(--accent); }
-
-  /* ---- main ---- */
-  main { padding: 22px 30px 60px; max-width: 1100px; }
-  .hero { border-radius: 16px; padding: 34px 36px;
-    background: linear-gradient(120deg, var(--grad1), var(--grad2));
-    border: 1px solid var(--border2); }
-  .hero h1 { margin: 0; font-size: 3.1rem; font-weight: 800; letter-spacing: -0.02em; color: #fff; }
-  @media (max-width: 640px) { .hero h1 { font-size: 2.1rem; } }
-  .hero p { color: #cdd8e8; font-size: 1.05rem; margin: 12px 0 20px; }
-  .chips { display: flex; gap: 12px; flex-wrap: wrap; }
-  .chip { background: rgba(8,16,30,0.55); border: 1px solid var(--border2);
-    border-radius: 999px; padding: 8px 16px; font-size: 0.82rem; font-weight: 700; color: #dbe6f5; }
-
-  .tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--border); margin: 26px 0 22px; }
-  .tab { padding: 10px 2px; font-size: 0.98rem; font-weight: 600; color: var(--muted);
-    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-  h3.section { font-size: 1.5rem; font-weight: 800; margin: 4px 0 18px; color: var(--heading); }
-
-  label.big { font-size: 0.95rem; color: var(--text); display: block; margin-bottom: 8px; }
-  textarea { width: 100%; background: var(--panel); color: var(--text);
-    border: 1px solid var(--border2); border-radius: 10px; padding: 14px;
-    font-family: var(--mono); font-size: 0.9rem; resize: vertical; }
-  #question { min-height: 240px; }
-  #code { min-height: 300px; }
-  .cta { width: 100%; margin-top: 16px; background: var(--accent); color: var(--accent-ink);
-    border: 0; border-radius: 10px; padding: 14px; font-size: 1rem; font-weight: 700; cursor: pointer; }
-  .cta:disabled { opacity: 0.6; cursor: default; }
-
-  .result { margin-top: 20px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px; }
-  .result h4 { margin: 0 0 6px; font-size: 1.1rem; }
-  .result .muted { color: var(--muted); font-size: 0.9rem; }
-  .badges { display: flex; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
-  .badge { background: var(--panel2); border: 1px solid var(--border2); border-radius: 10px;
-    padding: 12px 16px; min-width: 120px; }
-  .badge .k { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  .badge .v { font-size: 1.2rem; font-family: var(--mono); margin-top: 3px; color: var(--accent); }
-  .h5 { font-size: 0.95rem; margin: 18px 0 8px; font-weight: 700; }
-  .pill { display: inline-block; font-size: 0.68rem; background: var(--panel); border: 1px solid var(--border2);
-    border-radius: 999px; padding: 2px 9px; color: var(--muted); margin-left: 6px; vertical-align: middle; }
-  .item { border-left: 3px solid var(--border2); padding: 9px 13px; margin: 8px 0;
-    background: var(--panel2); border-radius: 0 8px 8px 0; }
-  .item .t { font-weight: 600; font-size: 0.92rem; }
-  .item .d { color: var(--muted); font-size: 0.85rem; margin-top: 3px; }
-  .sev-high { border-left-color: var(--bad); }
-  .sev-medium { border-left-color: var(--warn); }
-  .sev-low { border-left-color: var(--good); }
-  .mono { font-family: var(--mono); }
-  .err { color: var(--bad); font-family: var(--mono); font-size: 0.88rem; white-space: pre-wrap; }
-  .infobox { background: var(--panel2); border: 1px dashed var(--border2); border-radius: 10px;
-    padding: 18px 20px; color: var(--muted); font-size: 0.92rem; line-height: 1.6; }
-  .infobox b { color: var(--text); }
-  .hidden { display: none; }
-  .actions3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; margin-top: 4px; }
-  @media (max-width: 640px) { .actions3 { grid-template-columns: 1fr; } }
-  .actions3 .cta { margin-top: 12px; }
-  .mdh { font-weight: 800; color: var(--heading); margin: 16px 0 6px; }
-  .mdh.h1 { font-size: 1.4rem; } .mdh.h2 { font-size: 1.15rem; } .mdh.h3 { font-size: 1rem; }
-  .result p { margin: 8px 0; font-size: 0.92rem; }
-  .result ul { margin: 8px 0; padding-left: 20px; font-size: 0.92rem; }
-  .result li { margin: 4px 0; }
-  pre.code { background: #0a1220; border: 1px solid var(--border2); border-radius: 8px;
-    padding: 14px; overflow-x: auto; font-family: var(--mono); font-size: 0.84rem; line-height: 1.5; }
-  code.ic { background: #0a1220; border: 1px solid var(--border2); border-radius: 5px;
-    padding: 1px 5px; font-family: var(--mono); font-size: 0.85em; }
-  .tblwrap { max-height: 320px; overflow: auto; border: 1px solid var(--border2); border-radius: 8px; }
-  table.btable { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
-  table.btable th { position: sticky; top: 0; background: var(--panel2); color: var(--muted);
-    text-align: right; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border2); }
-  table.btable th:first-child, table.btable td:first-child { text-align: left; }
-  table.btable td { text-align: right; padding: 6px 12px; border-bottom: 1px solid var(--border); }
-  table.btable tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+  .result { margin-top:20px; background:rgba(17,27,46,.7); border:1px solid var(--border); border-radius:12px; padding:20px; backdrop-filter:blur(8px); }
+  .result h4 { margin:0 0 6px; font-size:1.1rem; color:var(--heading); }
+  .result .muted, .muted { color:var(--muted); font-size:.9rem; }
+  .badges { display:flex; gap:12px; flex-wrap:wrap; margin:0 0 8px; }
+  .badge { background:var(--panel2); border:1px solid var(--border2); border-radius:10px; padding:12px 16px; min-width:120px; }
+  .badge .k { font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .badge .v { font-size:1.2rem; font-family:var(--mono); margin-top:3px; color:var(--accent); }
+  .h5 { font-size:.95rem; margin:18px 0 8px; font-weight:700; color:var(--heading); }
+  .pill { display:inline-block; font-size:.68rem; background:var(--panel); border:1px solid var(--border2); border-radius:999px; padding:2px 9px; color:var(--muted); margin-left:6px; vertical-align:middle; }
+  .item { border-left:3px solid var(--border2); padding:9px 13px; margin:8px 0; background:var(--panel2); border-radius:0 8px 8px 0; }
+  .item .t { font-weight:600; font-size:.92rem; }
+  .item .d { color:var(--muted); font-size:.85rem; margin-top:3px; }
+  .sev-high { border-left-color:var(--bad); } .sev-medium { border-left-color:var(--warn); } .sev-low { border-left-color:var(--good); }
+  .mono { font-family:var(--mono); }
+  .err { color:var(--bad); font-family:var(--mono); font-size:.88rem; white-space:pre-wrap; }
+  .infobox { background:var(--panel2); border:1px dashed var(--border2); border-radius:10px; padding:18px 20px; color:var(--muted); font-size:.92rem; line-height:1.6; }
+  .infobox b { color:var(--text); }
+  .hidden { display:none !important; }
+  .mdh { font-weight:800; color:var(--heading); margin:16px 0 6px; }
+  .mdh.h1 { font-size:1.4rem; } .mdh.h2 { font-size:1.15rem; } .mdh.h3 { font-size:1rem; }
+  .result p { margin:8px 0; font-size:.92rem; } .result ul { margin:8px 0; padding-left:20px; font-size:.92rem; } .result li { margin:4px 0; }
+  pre.code { background:#0a1220; border:1px solid var(--border2); border-radius:8px; padding:14px; overflow-x:auto; font-family:var(--mono); font-size:.84rem; line-height:1.5; }
+  code.ic { background:#0a1220; border:1px solid var(--border2); border-radius:5px; padding:1px 5px; font-family:var(--mono); font-size:.85em; }
+  .tblwrap { max-height:320px; overflow:auto; border:1px solid var(--border2); border-radius:8px; }
+  table.btable { width:100%; border-collapse:collapse; font-size:.84rem; }
+  table.btable th { position:sticky; top:0; background:var(--panel2); color:var(--muted); text-align:right; padding:8px 12px; font-weight:600; border-bottom:1px solid var(--border2); }
+  table.btable th:first-child, table.btable td:first-child { text-align:left; }
+  table.btable td { text-align:right; padding:6px 12px; border-bottom:1px solid var(--border); }
+  table.btable tbody tr:nth-child(even) { background:rgba(255,255,255,.02); }
+  .actions3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; align-items:stretch; margin-top:8px; }
+  @media (max-width:640px){ .actions3 { grid-template-columns:1fr; } }
+  textarea, select { background-color:#0a0e1a !important; border-color:rgba(255,255,255,.1) !important; color:#f1f5f9 !important; }
+  textarea:focus, select:focus { border-color:#38bdf8 !important; box-shadow:0 0 0 1px #38bdf8 !important; }
 </style>
 </head>
-<body>
-<div class="app">
-  <!-- ================= SIDEBAR ================= -->
-  <aside>
-    <h2>Complexity Lab</h2>
-    <div class="sub">Controls</div>
+<body class="bg-background text-on-surface antialiased overflow-hidden h-screen flex font-body">
+<div class="fixed inset-0 z-0 pointer-events-none opacity-80 dim-target" id="three-container"></div>
 
-    <label for="template">Example template</label>
-    <select id="template"></select>
-
-    <div class="btns">
-      <button class="btn" id="load">Load Example</button>
-      <button class="btn" id="reset">Reset</button>
+<!-- Sidebar -->
+<aside class="w-72 h-full glass-sidebar flex flex-col z-10 overflow-y-auto shrink-0 relative dim-target fade-in-up">
+  <div class="p-6 pb-2">
+    <h1 class="text-xl font-bold tracking-tight text-white mb-1">Complexity Lab</h1>
+    <p class="text-xs text-on-surface-variant mb-6">Controls</p>
+    <div class="mb-6">
+      <label class="block text-sm font-semibold mb-2 text-white">Example template</label>
+      <select id="template" class="w-full rounded-md text-sm py-2 px-3 border appearance-none"></select>
     </div>
-
-    <label for="model" style="margin-top:22px">LLM model</label>
-    <select id="model">
-      <option value="gemma4:31b-cloud">Gemma 4 · 31B (cloud)</option>
-      <option value="gpt-oss:120b-cloud">GPT-OSS · 120B (cloud)</option>
-      <option value="gpt-oss:20b-cloud">GPT-OSS · 20B (cloud)</option>
-      <option value="minimax-m3:cloud">MiniMax M3 (cloud)</option>
-    </select>
-    <div class="note" style="margin-top:6px">
-      Used for AI generation in both tabs. Model id: <span class="mono" id="modelId">gemma4:31b-cloud</span>
+    <div class="flex gap-3 mb-8">
+      <button id="load" class="flex-1 bg-surface-container-high hover:bg-surface-bright text-white text-sm font-semibold py-2 px-4 rounded-md border border-outline-variant/30 transition-colors">Load Example</button>
+      <button id="reset" class="flex-1 bg-surface-container-high hover:bg-surface-bright text-white text-sm font-semibold py-2 px-4 rounded-md border border-outline-variant/30 transition-colors">Reset</button>
     </div>
-
-    <hr />
-    <div class="note">
-      <b>Vercel build.</b> The <b>Code Analyzer</b> runs full AST static analysis,
-      and both tabs use AI code generation via <b>Ollama Cloud</b>
-      (<span class="mono">gemma4:31b-cloud</span>).
+    <div class="mb-2">
+      <label class="block text-sm font-semibold mb-2 text-white">LLM model</label>
+      <select id="model" class="w-full rounded-md text-sm py-2 px-3 border appearance-none">
+        <option value="gemma4:31b-cloud">Gemma 4 · 31B (cloud)</option>
+        <option value="gpt-oss:120b-cloud">GPT-OSS · 120B (cloud)</option>
+        <option value="gpt-oss:20b-cloud">GPT-OSS · 20B (cloud)</option>
+        <option value="minimax-m3:cloud">MiniMax M3 (cloud)</option>
+      </select>
     </div>
+    <p class="text-xs text-on-surface-variant mb-8 leading-relaxed">Used for AI generation in both tabs. Model id: <code class="font-mono text-[10px] bg-black/30 px-1 py-0.5 rounded" id="modelId">gemma4:31b-cloud</code></p>
+  </div>
+  <div class="px-6 py-4 border-t border-white/5 mt-auto text-xs text-on-surface-variant leading-relaxed">
+    <p class="mb-3"><strong class="text-white">Code Analyzer</strong> runs full AST static analysis. Both tabs use AI generation via <strong class="text-white">Ollama Cloud</strong>.</p>
+    <p><strong class="text-white">Benchmarks</strong> execute the code across 30 input sizes and graph runtime + peak memory. Works locally; best-effort on serverless.</p>
+  </div>
+</aside>
 
-    <div class="note" style="margin-top:16px">
-      <b>Benchmarks</b> execute the code across 30 input sizes and graph runtime +
-      peak memory. Works locally; best-effort on serverless. Docker isolation is
-      full-app only. AI generation needs <span class="mono">OLLAMA_API_KEY</span>.
-    </div>
-  </aside>
+<!-- Main -->
+<main id="main-scroll" class="flex-1 h-full overflow-y-auto p-8 relative z-10 scroll-smooth">
+  <div class="max-w-5xl mx-auto space-y-8 pb-20 animate-breathe rounded-xl border border-primary/20 bg-background/40 backdrop-blur-sm p-4">
 
-  <!-- ================= MAIN ================= -->
-  <main>
-    <div class="hero">
-      <h1>Complexity Lab</h1>
-      <p>Interview-ready Python complexity, benchmark, and optimization analysis.</p>
-      <div class="chips">
-        <span class="chip">AST static analysis</span>
-        <span class="chip">Empirical benchmarks</span>
-        <span class="chip">Interview coaching</span>
-        <span class="chip">Best-effort execution guardrails</span>
+    <!-- Hero -->
+    <div class="hero-card rounded-xl p-8 text-white relative overflow-hidden shadow-2xl border border-white/10 dim-target fade-in-up">
+      <div class="relative z-10">
+        <h1 class="text-4xl md:text-5xl font-bold mb-4 tracking-tight text-white drop-shadow-md">Complexity Lab</h1>
+        <p class="text-lg text-white/90 mb-6 font-medium drop-shadow">Interview-ready Python complexity, benchmark, and optimization analysis.</p>
+        <div class="flex flex-wrap gap-3">
+          <span class="px-4 py-1.5 rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-sm font-semibold">AST static analysis</span>
+          <span class="px-4 py-1.5 rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-sm font-semibold">Empirical benchmarks</span>
+          <span class="px-4 py-1.5 rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-sm font-semibold">Interview coaching</span>
+          <span class="px-4 py-1.5 rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-sm font-semibold">Best-effort execution guardrails</span>
+        </div>
       </div>
+      <div class="absolute inset-0 bg-gradient-to-r from-black/20 to-transparent pointer-events-none"></div>
     </div>
 
-    <div class="tabs">
-      <div class="tab" data-tab="planner">Algorithm Planner</div>
-      <div class="tab active" data-tab="analyzer">Code Analyzer</div>
+    <!-- Tabs -->
+    <div class="border-b border-outline-variant/30 dim-target fade-in-up relative">
+      <div class="flex gap-8 relative pb-3">
+        <button class="tab tab-btn text-sm font-semibold text-on-surface-variant hover:text-white transition-colors" data-tab="planner">Algorithm Planner</button>
+        <button class="tab tab-btn active text-sm font-semibold text-primary transition-colors" data-tab="analyzer">Code Analyzer</button>
+      </div>
+      <div class="absolute bottom-0 h-0.5 bg-primary tab-indicator rounded-t-md" id="tab-indicator" style="width:104px; transform:translateX(148px);"></div>
     </div>
 
-    <!-- ---- Algorithm Planner ---- -->
-    <section id="tab-planner" class="hidden">
-      <h3 class="section">Algorithm Optimization Planner</h3>
-      <label class="big" for="question">Enter your coding question</label>
-      <textarea id="question" placeholder="Paste a coding interview problem, constraints, examples, and expected output."></textarea>
-      <button class="cta" id="plan">Generate Optimization Plan</button>
+    <!-- Algorithm Planner -->
+    <section id="tab-planner" class="hidden fade-in-up">
+      <h2 class="text-2xl font-bold text-white tracking-tight mb-1 dim-target">Algorithm Optimization Planner</h2>
+      <p class="text-sm text-on-surface mb-3 dim-target">Enter your coding question</p>
+      <div class="glass-panel rounded-xl overflow-hidden shadow-xl">
+        <textarea id="question" class="w-full min-h-[240px] bg-transparent border-0 text-white font-mono text-sm p-4 resize-y outline-none" placeholder="Paste a coding interview problem, constraints, examples, and expected output."></textarea>
+      </div>
+      <button id="plan" class="btn-analyze w-full mt-4 py-3 px-6 rounded-lg font-bold text-[15px]">Generate Optimization Plan</button>
       <div id="planOut"></div>
-      <button class="cta hidden" id="planBench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks on the reference solution</button>
+      <button id="planBench" class="btn-outline hidden w-full mt-4 py-3 px-6 rounded-lg font-bold text-[15px]">▶ Run 30 benchmarks on the reference solution</button>
       <div id="planBenchOut"></div>
     </section>
 
-    <!-- ---- Code Analyzer ---- -->
-    <section id="tab-analyzer">
-      <h3 class="section">Static Code Analyzer</h3>
-      <label class="big" for="code">Paste Python code</label>
-      <textarea id="code" placeholder="def two_sum(nums, target): ..."></textarea>
+    <!-- Code Analyzer -->
+    <section id="tab-analyzer" class="fade-in-up editor-container">
+      <h2 class="text-2xl font-bold text-white tracking-tight mb-1 dim-target">Static Code Analyzer</h2>
+      <p class="text-sm text-on-surface mb-3 dim-target">Paste Python code</p>
+      <div class="glass-panel rounded-xl overflow-hidden shadow-xl flex flex-col min-h-[380px]">
+        <textarea id="code" class="w-full h-full min-h-[380px] bg-transparent border-0 text-white font-mono text-sm p-4 resize-y outline-none" placeholder="def two_sum(nums, target): ..."></textarea>
+      </div>
       <div class="actions3">
-        <button class="cta" id="run">Analyze</button>
-        <button class="cta" id="bench" style="background:transparent;color:var(--good);border:1px solid var(--good);">▶ Run 30 benchmarks &amp; graph</button>
-        <button class="cta" id="optimize" style="background:transparent;color:var(--accent);border:1px solid var(--accent2,#7ee2b8);">✨ Optimize → Top 3</button>
+        <button id="run" class="btn-analyze py-3 px-6 rounded-lg font-bold text-[15px]">Analyze</button>
+        <button id="bench" class="btn-outline py-3 px-6 rounded-lg font-bold text-[15px]">▶ Run 30 benchmarks &amp; graph</button>
+        <button id="optimize" class="btn-outline py-3 px-6 rounded-lg font-bold text-[15px]">✨ Optimize → Top 3</button>
       </div>
       <div id="out"></div>
       <div id="benchOut"></div>
       <div id="optOut"></div>
     </section>
-  </main>
-</div>
 
+  </div>
+</main>
+
+<!-- ============ design script: 3D bg + scroll reactivity + fades + tabs ============ -->
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const container = document.getElementById('three-container');
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let scrollFactor = 0;
+  try {
+    const w = container.clientWidth || innerWidth, h = container.clientHeight || innerHeight;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, w/h, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ alpha:true, antialias:true });
+    renderer.setSize(w, h); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+    const group = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(2,2),
+      new THREE.MeshPhongMaterial({ color:0x7dd3fc, wireframe:true, transparent:true, opacity:0.4 }));
+    group.add(core);
+    const nodeGeo = new THREE.SphereGeometry(0.1,16,16);
+    const nodeMat = new THREE.MeshPhongMaterial({ color:0x7dd3fc });
+    for (let i=0;i<20;i++){ const nd=new THREE.Mesh(nodeGeo,nodeMat);
+      const phi=Math.acos(-1+(2*i)/20), theta=Math.sqrt(20*Math.PI)*phi;
+      nd.position.setFromSphericalCoords(2.5,phi,theta); group.add(nd); }
+    scene.add(group);
+    const light=new THREE.PointLight(0xffffff,1,100); light.position.set(5,5,5);
+    scene.add(light); scene.add(new THREE.AmbientLight(0x404040));
+    camera.position.z=6;
+    // scroll-reactive graphics: main pane scroll drives rotation + zoom
+    const mainEl = document.getElementById('main-scroll');
+    mainEl.addEventListener('scroll', () => {
+      const max = mainEl.scrollHeight - mainEl.clientHeight;
+      scrollFactor = max > 0 ? mainEl.scrollTop / max : 0;
+    }, { passive:true });
+    function animate(t){
+      requestAnimationFrame(animate);
+      if (!prefersReduced){
+        group.rotation.y += 0.002 + scrollFactor*0.03;
+        group.rotation.x = 0.001*t*0 + scrollFactor*Math.PI;
+        group.position.y = Math.sin(t*0.001)*0.1;
+        camera.position.z = 6 - scrollFactor*1.5;
+      }
+      renderer.render(scene,camera);
+    }
+    addEventListener('resize', () => {
+      const ww=container.clientWidth||innerWidth, hh=container.clientHeight||innerHeight;
+      camera.aspect=ww/hh; camera.updateProjectionMatrix(); renderer.setSize(ww,hh);
+    });
+    animate(0);
+  } catch(e){ /* WebGL unavailable — background stays empty */ }
+
+  // entrance fade-ins
+  const io = new IntersectionObserver((entries,obs)=>{
+    entries.forEach(en=>{ if(en.isIntersecting){ en.target.classList.add('is-visible'); obs.unobserve(en.target); } });
+  }, { threshold:0.1, root: document.getElementById('main-scroll') });
+  document.querySelectorAll('.fade-in-up').forEach((el,i)=>{ el.style.transitionDelay=`${i*90}ms`; io.observe(el); });
+
+  // editor focus dimming
+  const ed = document.getElementById('code');
+  if (ed){ ed.addEventListener('focus',()=>document.body.classList.add('editor-focused'));
+           ed.addEventListener('blur',()=>document.body.classList.remove('editor-focused')); }
+
+  // tab indicator follows the active tab
+  const indicator = document.getElementById('tab-indicator');
+  function moveIndicator(btn){
+    const r=btn.getBoundingClientRect(), pr=btn.parentElement.getBoundingClientRect();
+    indicator.style.width = `${r.width}px`;
+    indicator.style.transform = `translateX(${r.left-pr.left}px)`;
+  }
+  document.querySelectorAll('.tab-btn').forEach(b=>b.addEventListener('click',()=>{
+    document.querySelectorAll('.tab-btn').forEach(x=>{ x.classList.remove('active','text-primary'); x.classList.add('text-on-surface-variant'); });
+    b.classList.add('active','text-primary'); b.classList.remove('text-on-surface-variant');
+    moveIndicator(b);
+  }));
+  const act = document.querySelector('.tab-btn.active'); if(act) moveIndicator(act);
+});
+</script>
+
+<!-- ============ app logic (working) ============ -->
 <script>
 const EXAMPLES = {"Two Sum - Brute Force": {"code": "def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []\n"}, "Duplicate Detector - List Membership": {"code": "def find_duplicates(values):\n    seen = []\n    duplicates = []\n    for value in values:\n        if value in seen and value not in duplicates:\n            duplicates.append(value)\n        seen.append(value)\n    return duplicates\n"}, "Sorted Scores": {"code": "def top_scores(scores, k):\n    ordered = sorted(scores, reverse=True)\n    return ordered[:k]\n"}, "Recursive Fibonacci": {"code": "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n"}, "Binary Search": {"code": "def binary_search(values, target):\n    left, right = 0, len(values) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if values[mid] == target:\n            return mid\n        if values[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n"}, "Sliding Window Max Sum": {"code": "def max_window_sum(values, k):\n    window_sum = sum(values[:k])\n    best = window_sum\n    left = 0\n    for right in range(k, len(values)):\n        window_sum += values[right]\n        window_sum -= values[left]\n        left += 1\n        best = max(best, window_sum)\n    return best\n"}, "Top K With Heap": {"code": "from heapq import heappush, heappop\n\ndef top_k(values, k):\n    heap = []\n    for value in values:\n        heappush(heap, value)\n        if len(heap) > k:\n            heappop(heap)\n    return sorted(heap, reverse=True)\n"}, "Memoized Fibonacci": {"code": "from functools import lru_cache\n\n@lru_cache(maxsize=None)\ndef fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n"}, "Graph BFS": {"code": "from collections import deque\n\ndef bfs(graph, start):\n    visited = set([start])\n    queue = deque([start])\n    order = []\n    while queue:\n        node = queue.popleft()\n        order.append(node)\n        for neighbor in graph.get(node, []):\n            if neighbor not in visited:\n                visited.add(neighbor)\n                queue.append(neighbor)\n    return order\n"}};
 
@@ -503,6 +568,6 @@ $("bench").addEventListener("click", () => runBenchmark($("code").value, $("benc
 // Planner: pull the first ```python block from the generated plan and benchmark it.
 let lastPlanCode = "";
 $("planBench").addEventListener("click", () => runBenchmark(lastPlanCode, $("planBench"), $("planBenchOut")));
+
 </script>
-</body>
-</html>
+</body></html>
