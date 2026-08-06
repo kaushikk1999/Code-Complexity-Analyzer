@@ -12,6 +12,7 @@ A small denylist blocks the most dangerous stdlib calls.
 from __future__ import annotations
 
 import ast
+import copy
 import inspect
 import json
 import random
@@ -66,16 +67,67 @@ def _make_arg(name: str, size: int):
     return [random.randint(0, size) for _ in range(size)]
 
 
-def _build_args(func, size: int):
+def _positional_params(func) -> list[str]:
     sig = inspect.signature(func)
-    args = []
+    names = []
     for i, (pname, p) in enumerate(sig.parameters.items()):
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
         if p.default is not inspect.Parameter.empty and i > 1:
             continue  # let optional trailing args default
-        args.append(_make_arg(pname if pname else f"p{i}", size))
+        names.append(pname or f"p{i}")
+    return names
+
+
+def _int_arg(size: int, first: bool) -> int:
+    # small for the leading "n"-style arg (avoid exponential blow-ups), else size//2
+    return max(1, min(size, 25)) if first else max(1, size // 2)
+
+
+def _strategy_args(names: list[str], size: int, mode: str) -> list:
+    """Build a full positional-arg tuple under a given input-shape strategy."""
+    args = []
+    for i, nm in enumerate(names):
+        if mode == "heuristic":
+            args.append(_make_arg(nm, size))
+        elif mode == "list_then_int":
+            args.append([random.randint(0, size) for _ in range(size)] if i == 0 else _int_arg(size, False))
+        elif mode == "all_list":
+            args.append([random.randint(0, size) for _ in range(size)])
+        elif mode == "pairs_then_int":
+            args.append([[random.randint(0, size), random.randint(0, size)] for _ in range(size)]
+                        if i == 0 else _int_arg(size, False))
+        elif mode == "all_int":
+            args.append(_int_arg(size, i == 0))
+        else:
+            args.append(_make_arg(nm, size))
     return args
+
+
+# Ordered fallbacks: try each shape on a tiny probe, keep the first that runs.
+_STRATEGIES = ("heuristic", "list_then_int", "all_list", "pairs_then_int", "all_int")
+
+
+def _choose_strategy(func, names: list[str]) -> str | None:
+    if not names:
+        # zero-arg or fully-defaulted function: verify a bare call works.
+        try:
+            func()
+            return "heuristic"
+        except Exception:
+            return None
+    for mode in _STRATEGIES:
+        try:
+            func(*copy.deepcopy(_strategy_args(names, 6, mode)))
+            return mode
+        except Exception:
+            continue
+    return None
+
+
+def _build_args(func, size: int):
+    """Back-compat helper (used by the correctness check): heuristic shape."""
+    return _strategy_args(_positional_params(func), size, "heuristic")
 
 
 def _run(raw_body: bytes) -> dict:
@@ -104,13 +156,21 @@ def _run(raw_body: bytes) -> dict:
     if not callable(func):
         return {"ok": False, "error": f"'{entry}' is not callable."}
 
+    # Probe input shapes and keep the first that actually runs.
+    names = _positional_params(func)
+    strategy = _choose_strategy(func, names)
+    if strategy is None:
+        return {"ok": False, "error": f"Couldn't auto-generate inputs for '{entry}' "
+                f"({len(names)} arg(s): {', '.join(names) or 'none'}). Its signature isn't "
+                "auto-benchmarkable — try a function that takes a list/number."}
+
     # 30 increasing input sizes.
     sizes = [ (i + 1) * 20 for i in range(N_POINTS) ]
     points = []
     started = time.perf_counter()
     for size in sizes:
         try:
-            args = _build_args(func, size)
+            args = _strategy_args(names, size, strategy)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"Could not build inputs: {exc}"}
         # time: best of 3 short repeats (wall clock + CPU time)
