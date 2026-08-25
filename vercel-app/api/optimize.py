@@ -140,7 +140,7 @@ def _benchmark(code: str) -> dict:
 def _load_func(code: str, entry: str):
     ns: dict = {}
     exec(compile(code, "<cand>", "exec"), ns)  # noqa: S102
-    return ns.get(entry)
+    return bench._resolve_callable(ns, entry)
 
 
 def _correctness(original: str, candidate: str, entry: str) -> float:

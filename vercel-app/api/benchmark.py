@@ -42,6 +42,9 @@ def _guard(code: str) -> str:
 
 
 def _first_function(code: str) -> str | None:
+    """Return the entrypoint name. Top-level functions win; otherwise fall back
+    to the first public method of the first class, as 'ClassName.method'
+    (covers LeetCode-style `class Solution: def method(self, ...)`)."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -49,7 +52,28 @@ def _first_function(code: str) -> str | None:
     for node in tree.body:
         if isinstance(node, ast.FunctionDef):
             return node.name
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and not item.name.startswith("__"):
+                    return f"{node.name}.{item.name}"
     return None
+
+
+def _resolve_callable(ns: dict, entry: str):
+    """Resolve an entrypoint name from an exec'd namespace to a callable,
+    instantiating the class for 'ClassName.method' entrypoints."""
+    if "." in entry:
+        cls_name, method = entry.split(".", 1)
+        cls = ns.get(cls_name)
+        if cls is None:
+            return None
+        try:
+            instance = cls()
+        except Exception:
+            return None
+        return getattr(instance, method, None)
+    return ns.get(entry)
 
 
 def _make_arg(name: str, size: int):
@@ -145,14 +169,16 @@ def _run(raw_body: bytes) -> dict:
 
     entry = (data.get("entrypoint") or "").strip() or _first_function(code)
     if not entry:
-        return {"ok": False, "error": "No top-level function found to benchmark."}
+        return {"ok": False, "error": "No function found to benchmark. Add a "
+                "top-level `def` (or a class with a method) that takes a "
+                "list/number argument."}
 
     ns: dict = {}
     try:
         exec(compile(code, "<snippet>", "exec"), ns)  # noqa: S102 (intentional)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Code failed to load: {exc}"}
-    func = ns.get(entry)
+    func = _resolve_callable(ns, entry)
     if not callable(func):
         return {"ok": False, "error": f"'{entry}' is not callable."}
 
