@@ -79,6 +79,13 @@ tailwind.config = { darkMode: "class", theme: { extend: {
   .mdh.h1 { font-size:1.4rem; } .mdh.h2 { font-size:1.15rem; } .mdh.h3 { font-size:1rem; }
   .result p { margin:8px 0; font-size:.92rem; } .result ul { margin:8px 0; padding-left:20px; font-size:.92rem; } .result li { margin:4px 0; }
   pre.code { background:#0a1220; border:1px solid var(--border2); border-radius:8px; padding:14px; overflow-x:auto; font-family:var(--mono); font-size:.84rem; line-height:1.5; }
+  .code-wrap { position:relative; }
+  .copy-btn { position:absolute; top:8px; right:8px; z-index:2; background:rgba(45,212,191,.12);
+    color:#2dd4bf; border:1px solid #0f766e; border-radius:6px; padding:4px 12px; font-size:.72rem;
+    font-weight:700; cursor:pointer; font-family:var(--mono); transition:all .15s ease; }
+  .copy-btn:hover { background:rgba(45,212,191,.25); border-color:#2dd4bf; }
+  .copy-btn.copied { background:rgba(126,226,184,.25); color:#7ee2b8; border-color:#7ee2b8; }
+  .code-wrap pre.code { padding-top:30px; }
   code.ic { background:#0a1220; border:1px solid var(--border2); border-radius:5px; padding:1px 5px; font-family:var(--mono); font-size:.85em; }
   .tblwrap { max-height:320px; overflow:auto; border:1px solid var(--border2); border-radius:8px; }
   table.btable { width:100%; border-collapse:collapse; font-size:.84rem; }
@@ -276,6 +283,41 @@ const sevClass = (s) => {
   return "sev-low";
 };
 
+// Code block with a Copy button (copies the exact code for LeetCode).
+function codeBlock(code) {
+  return `<div class="code-wrap"><button class="copy-btn" type="button">Copy</button>`
+    + `<pre class="code"><code>${esc(code)}</code></pre></div>`;
+}
+// One delegated handler for every copy button (current + future renders).
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".copy-btn");
+  if (!btn) return;
+  const codeEl = btn.parentElement.querySelector("pre.code code");
+  if (!codeEl) return;
+  const text = codeEl.textContent;
+  const legacyCopy = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.top = "0"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) { return false; }
+  };
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) { /* fall through to legacy */ }
+  if (!ok) ok = legacyCopy();
+  btn.textContent = ok ? "Copied!" : "Press ⌘C";
+  btn.classList.toggle("copied", ok);
+  setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1600);
+});
+
 // ---- sidebar templates ----
 const tSel = $("template");
 Object.keys(EXAMPLES).forEach(name => {
@@ -368,7 +410,7 @@ function md(src) {
   parts.forEach((chunk, i) => {
     if (i % 2 === 1) { // fenced code block
       const body = chunk.replace(/^[a-zA-Z0-9]*\n/, "");
-      out += `<pre class="code"><code>${esc(body.replace(/\n$/, ""))}</code></pre>`;
+      out += codeBlock(body.replace(/\n$/, ""));
       return;
     }
     chunk.split(/\n{2,}/).forEach(block => {
@@ -475,7 +517,7 @@ function candidateCard(c, rank) {
     <div class="h5">Why this was selected</div>
     <p>${esc(c.explanation || "Optimized rewrite.")}</p>
     <div class="h5">Optimized code</div>
-    <pre class="code"><code>${esc(c.code)}</code></pre>
+    ${codeBlock(c.code)}
   </div>`;
 }
 async function runOptimize() {
