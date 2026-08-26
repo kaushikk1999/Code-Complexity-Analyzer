@@ -60,6 +60,37 @@ def _first_function(code: str) -> str | None:
     return None
 
 
+def _find_node_class(ns: dict):
+    """Find a linked-list node class defined in the snippet (has a `.next`)."""
+    for value in ns.values():
+        if not isinstance(value, type):
+            continue
+        inst = None
+        for attempt in ((0,), ()):
+            try:
+                inst = value(*attempt)
+                break
+            except Exception:
+                continue
+        if inst is not None and hasattr(inst, "next"):
+            return value
+    return None
+
+
+def _make_linked_list(node_cls, size: int):
+    """Build a linked list of `size` nodes from a node class like ListNode."""
+    head = None
+    for _ in range(max(1, size)):
+        try:
+            node = node_cls(random.randint(0, 9))
+        except Exception:
+            node = node_cls()
+            setattr(node, "val", random.randint(0, 9))
+        node.next = head
+        head = node
+    return head
+
+
 def _resolve_callable(ns: dict, entry: str):
     """Resolve an entrypoint name from an exec'd namespace to a callable,
     instantiating the class for 'ClassName.method' entrypoints."""
@@ -108,11 +139,13 @@ def _int_arg(size: int, first: bool) -> int:
     return max(1, min(size, 25)) if first else max(1, size // 2)
 
 
-def _strategy_args(names: list[str], size: int, mode: str) -> list:
+def _strategy_args(names: list[str], size: int, mode: str, node_cls=None) -> list:
     """Build a full positional-arg tuple under a given input-shape strategy."""
     args = []
     for i, nm in enumerate(names):
-        if mode == "heuristic":
+        if mode == "linked_list":
+            args.append(_make_linked_list(node_cls, size))
+        elif mode == "heuristic":
             args.append(_make_arg(nm, size))
         elif mode == "list_then_int":
             args.append([random.randint(0, size) for _ in range(size)] if i == 0 else _int_arg(size, False))
@@ -132,7 +165,7 @@ def _strategy_args(names: list[str], size: int, mode: str) -> list:
 _STRATEGIES = ("heuristic", "list_then_int", "all_list", "pairs_then_int", "all_int")
 
 
-def _choose_strategy(func, names: list[str]) -> str | None:
+def _choose_strategy(func, names: list[str], node_cls=None) -> str | None:
     if not names:
         # zero-arg or fully-defaulted function: verify a bare call works.
         try:
@@ -140,18 +173,22 @@ def _choose_strategy(func, names: list[str]) -> str | None:
             return "heuristic"
         except Exception:
             return None
-    for mode in _STRATEGIES:
+    # Try a linked-list shape first when the snippet defines a node class.
+    modes = (["linked_list"] + list(_STRATEGIES)) if node_cls is not None else list(_STRATEGIES)
+    for mode in modes:
         try:
-            func(*copy.deepcopy(_strategy_args(names, 6, mode)))
+            func(*copy.deepcopy(_strategy_args(names, 6, mode, node_cls)))
             return mode
         except Exception:
             continue
     return None
 
 
-def _build_args(func, size: int):
-    """Back-compat helper (used by the correctness check): heuristic shape."""
-    return _strategy_args(_positional_params(func), size, "heuristic")
+def _build_args(func, size: int, node_cls=None):
+    """Back-compat helper (used by the correctness check): pick a working shape."""
+    names = _positional_params(func)
+    mode = _choose_strategy(func, names, node_cls) or "heuristic"
+    return _strategy_args(names, size, mode, node_cls)
 
 
 def _run(raw_body: bytes) -> dict:
@@ -183,8 +220,9 @@ def _run(raw_body: bytes) -> dict:
         return {"ok": False, "error": f"'{entry}' is not callable."}
 
     # Probe input shapes and keep the first that actually runs.
+    node_cls = _find_node_class(ns)
     names = _positional_params(func)
-    strategy = _choose_strategy(func, names)
+    strategy = _choose_strategy(func, names, node_cls)
     if strategy is None:
         return {"ok": False, "error": f"Couldn't auto-generate inputs for '{entry}' "
                 f"({len(names)} arg(s): {', '.join(names) or 'none'}). Its signature isn't "
@@ -196,7 +234,7 @@ def _run(raw_body: bytes) -> dict:
     started = time.perf_counter()
     for size in sizes:
         try:
-            args = _strategy_args(names, size, strategy)
+            args = _strategy_args(names, size, strategy, node_cls)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"Could not build inputs: {exc}"}
         # time: best of 3 short repeats (wall clock + CPU time)
