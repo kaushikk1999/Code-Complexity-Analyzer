@@ -6,6 +6,12 @@
     },
     "api/generate.py": {
       "maxDuration": 60
+    },
+    "api/optimize.py": {
+      "maxDuration": 300
+    },
+    "api/benchmark.py": {
+      "maxDuration": 60
     }
   }
 }

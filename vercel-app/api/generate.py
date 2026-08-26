@@ -49,7 +49,7 @@ OPTIMIZE_SYSTEM = (
 )
 
 
-def _ollama_chat(api_key: str, model: str, system: str, user: str) -> str:
+def _ollama_chat(api_key: str, model: str, system: str, user: str, timeout: int = TIMEOUT) -> str:
     body = json.dumps(
         {
             "model": model,
@@ -69,7 +69,7 @@ def _ollama_chat(api_key: str, model: str, system: str, user: str) -> str:
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     return (payload.get("message", {}) or {}).get("content", "").strip()
 

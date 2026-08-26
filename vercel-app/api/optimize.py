@@ -123,9 +123,18 @@ def _static_metrics(code: str) -> dict:
 
 
 # ---------- dynamic metrics ----------
-def _benchmark(code: str) -> dict:
-    """Return {ok, time_ms, peak_kb, cpu_ms, total_ms, fit, entrypoint}."""
-    res = bench._run(json.dumps({"code": code}).encode())
+def _benchmark(code: str, entrypoint: str = "") -> dict:
+    """Return {ok, time_ms, peak_kb, cpu_ms, total_ms, fit, entrypoint}.
+
+    Passing the known entrypoint lets candidates that define it via assignment
+    (e.g. a lambda) or keep the same name still benchmark."""
+    payload = {"code": code}
+    if entrypoint:
+        payload["entrypoint"] = entrypoint
+    res = bench._run(json.dumps(payload).encode())
+    if not res.get("ok") and entrypoint:
+        # entrypoint may have been renamed — retry with auto-detection.
+        res = bench._run(json.dumps({"code": code}).encode())
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error", "benchmark failed")}
     pts = res["points"]
@@ -169,23 +178,57 @@ def _correctness(original: str, candidate: str, entry: str) -> float:
 
 
 # ---------- LLM generation (parallel) ----------
+GEN_TIMEOUT = 150  # per-model read timeout; big models are slow
+GEN_RETRIES = 2    # extra attempts on timeout/transient errors
+
+
+def _looks_like_code(text: str) -> bool:
+    return bool(re.search(r"^\s*(def|class|from|import)\s", text, re.M))
+
+
+def _strip_thinking(text: str) -> str:
+    # Some models emit <think>...</think> or "Thinking..." preambles.
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.I)
+    return text.strip()
+
+
 def _extract_code(text: str) -> tuple[str, str]:
-    m = re.search(r"```python\s*([\s\S]*?)```", text, re.I)
-    code = m.group(1).strip() if m else ""
-    explanation = re.sub(r"```python[\s\S]*?```", "", text, flags=re.I).strip()
-    return code, explanation[:600]
+    """Lenient extraction: ```python fence -> any ``` fence -> raw code body."""
+    text = _strip_thinking(text)
+    # 1) a python-tagged fence
+    m = re.search(r"```(?:python|py)\s*([\s\S]*?)```", text, re.I)
+    # 2) any fenced block whose contents look like code
+    if not m:
+        for blk in re.finditer(r"```[a-zA-Z0-9]*\s*([\s\S]*?)```", text):
+            if _looks_like_code(blk.group(1)):
+                m = blk
+                break
+    if m:
+        code = m.group(1).strip()
+        explanation = re.sub(r"```[a-zA-Z0-9]*[\s\S]*?```", "", text).strip()
+        return code, explanation[:600]
+    # 3) no fences at all — if the whole reply is basically code, use it
+    if _looks_like_code(text):
+        return text.strip(), ""
+    return "", text[:600]
 
 
 def _generate_one(api_key: str, model: str, code: str) -> dict:
-    user = f"Optimize this Python code:\n\n```python\n{code[:8000]}\n```"
-    try:
-        text = gen._ollama_chat(api_key, model, OPT_SYSTEM, user)
-    except Exception as exc:  # noqa: BLE001
-        return {"model": model, "ok": False, "error": str(exc)[:200]}
-    ccode, expl = _extract_code(text)
-    if not ccode:
-        return {"model": model, "ok": False, "error": "No code block returned."}
-    return {"model": model, "ok": True, "code": ccode, "explanation": expl}
+    user = ("Optimize this Python code. Return the full rewrite inside a single "
+            f"```python code block.\n\n```python\n{code[:8000]}\n```")
+    last_err = ""
+    for attempt in range(1 + GEN_RETRIES):
+        try:
+            text = gen._ollama_chat(api_key, model, OPT_SYSTEM, user, timeout=GEN_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            last_err = str(exc)[:200]
+            continue  # retry on timeout / transient network error
+        ccode, expl = _extract_code(text)
+        if ccode:
+            return {"model": model, "ok": True, "code": ccode, "explanation": expl}
+        last_err = "No code block returned."
+        # retry once more asking more forcefully handled by same prompt
+    return {"model": model, "ok": False, "error": last_err or "generation failed"}
 
 
 # ---------- scoring ----------
@@ -250,7 +293,7 @@ def _run(raw_body: bytes) -> dict:
         if not c.get("ok"):
             failures.append({"model": c["model"], "error": c.get("error", "generation failed")})
             continue
-        dyn = _benchmark(c["code"])
+        dyn = _benchmark(c["code"], entry)
         if not dyn.get("ok"):
             failures.append({"model": c["model"], "error": f"candidate benchmark failed: {dyn.get('error')}"})
             continue
