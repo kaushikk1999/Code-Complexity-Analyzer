@@ -41,17 +41,31 @@ gen = _load("generate")
 bench = _load("benchmark")
 
 # Ranking weights (sum of non-correctness terms = 0.60; correctness = 0.40).
-W_CORRECT, W_TIME, W_MEM, W_CX, W_READ = 0.40, 0.20, 0.15, 0.15, 0.10
+# Complexity is the dominant lever, so it and runtime carry the most weight
+# after correctness.
+W_CORRECT, W_TIME, W_MEM, W_CX, W_READ = 0.38, 0.20, 0.12, 0.22, 0.08
 CX_RANK = {"O(1)": 0, "O(log n)": 1, "O(n)": 2, "O(n log n)": 3,
            "O(n^2)": 4, "O(n^2 log n)": 5, "O(n^3)": 6, "O(2^n)": 8, "Unknown": 4}
 
 OPT_SYSTEM = (
-    "You are an expert Python performance engineer. Rewrite the given function "
-    "to be faster and lighter while preserving identical behavior, argument "
-    "names, and return contract. Prefer better algorithms and data structures "
-    "over micro-optimizations. Keep it simple, readable, and beginner-friendly. "
-    "Return ONLY a single fenced ```python code block containing the full "
-    "rewrite, then 2-4 sentences explaining the key optimizations."
+    "You are a world-class competitive-programming and Python performance "
+    "expert. Rewrite the given function to achieve the LOWEST POSSIBLE "
+    "asymptotic time complexity first, then the lowest auxiliary space, while "
+    "preserving identical behavior, argument names, and return contract.\n"
+    "Rules:\n"
+    "- Reach the optimal Big-O for the problem (e.g. O(n) or O(n log n) instead "
+    "of O(n^2); O(1) space instead of O(n) when possible). Beat the original's "
+    "time AND space complexity whenever an asymptotically better algorithm "
+    "exists.\n"
+    "- Choose the right data structure (hash map/set for O(1) lookup, heap for "
+    "top-k, two pointers / sliding window, prefix sums, binary search, "
+    "monotonic stack, DP with rolling arrays for O(1) space).\n"
+    "- Eliminate repeated work, nested scans, and growing-list membership tests.\n"
+    "- Do NOT trade correctness for speed; handle the same edge cases.\n"
+    "- Keep it clean and idiomatic — no needless abstraction.\n"
+    "Return ONLY a single fenced ```python code block with the full rewrite, "
+    "then 2-4 sentences stating the achieved time and space complexity and why "
+    "it is optimal."
 )
 
 
