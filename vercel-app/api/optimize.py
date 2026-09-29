@@ -9,7 +9,7 @@ Workflow (per the product spec):
 
 PLATFORM NOTE: executes code, so it is a local/best-effort feature (not a
 hardened sandbox). "Configured models" are the free Ollama Cloud models in
-generate.ALLOWED_MODELS; Claude/GPT/Gemini would need their own keys.
+generate.active_models(); Gemini joins when GEMINI_API_KEY is set.
 """
 
 from __future__ import annotations
@@ -294,7 +294,7 @@ def _run(raw_body: bytes) -> dict:
     baseline = {"entrypoint": entry, "static": _static_metrics(code), "dynamic": base_dyn}
 
     # 2. Parallel generation
-    models = sorted(gen.ALLOWED_MODELS)
+    models = gen.active_models()
     raw_candidates = []
     with ThreadPoolExecutor(max_workers=len(models)) as pool:
         futs = {pool.submit(_generate_one, api_key, m, code): m for m in models}

@@ -24,7 +24,11 @@ ALLOWED_MODELS = {
     "gemma4:31b-cloud",
     "gpt-oss:120b-cloud",
     "gpt-oss:20b-cloud",
+    "gemini",  # Google Gemini API (needs GEMINI_API_KEY), not Ollama
 }
+# Google Gemini API: model id is configurable; GEMINI_API_KEY enables it.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 TIMEOUT = 55  # seconds; keep under the function maxDuration
 
 PLAN_SYSTEM = (
@@ -60,7 +64,37 @@ OPTIMIZE_SYSTEM = (
 )
 
 
+def _gemini_configured() -> bool:
+    return bool(os.getenv("GEMINI_API_KEY", "").strip())
+
+
+def active_models() -> list[str]:
+    """Models usable right now (Gemini only when its key is set)."""
+    return sorted(m for m in ALLOWED_MODELS if m != "gemini" or _gemini_configured())
+
+
+def _gemini_chat(system: str, user: str, timeout: int = TIMEOUT) -> str:
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not set on this deployment.")
+    body = json.dumps({
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        GEMINI_URL.format(model=GEMINI_MODEL), data=body, method="POST",
+        headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    parts = ((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
 def _ollama_chat(api_key: str, model: str, system: str, user: str, timeout: int = TIMEOUT) -> str:
+    """Chat with the selected model. 'gemini' routes to Google's API."""
+    if model == "gemini":
+        return _gemini_chat(system, user, timeout)
     body = json.dumps(
         {
             "model": model,
@@ -86,13 +120,6 @@ def _ollama_chat(api_key: str, model: str, system: str, user: str, timeout: int 
 
 
 def _run(raw_body: bytes) -> dict:
-    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
-    if not api_key:
-        return {
-            "ok": False,
-            "error": "OLLAMA_API_KEY is not set on this deployment. Add it in "
-            "Vercel → Project → Settings → Environment Variables, then redeploy.",
-        }
     try:
         data = json.loads(raw_body or b"{}")
     except (ValueError, TypeError):
@@ -101,6 +128,17 @@ def _run(raw_body: bytes) -> dict:
     model = (data.get("model") or "").strip()
     if model not in ALLOWED_MODELS:
         model = DEFAULT_MODEL
+
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if model == "gemini" and not _gemini_configured():
+        return {"ok": False, "error": "GEMINI_API_KEY is not set on this deployment. "
+                "Add it in Vercel → Project → Settings → Environment Variables, then redeploy."}
+    if model != "gemini" and not api_key:
+        return {
+            "ok": False,
+            "error": "OLLAMA_API_KEY is not set on this deployment. Add it in "
+            "Vercel → Project → Settings → Environment Variables, then redeploy.",
+        }
 
     mode = (data.get("mode") or "plan").strip()
     if mode == "optimize":
@@ -118,9 +156,10 @@ def _run(raw_body: bytes) -> dict:
         text = _ollama_chat(api_key, model, system, user)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "ignore")[:300] if exc.fp else ""
-        return {"ok": False, "error": f"Ollama Cloud error {exc.code}. {detail}"}
+        src = "Gemini API" if model == "gemini" else "Ollama Cloud"
+        return {"ok": False, "error": f"{src} error {exc.code}. {detail}"}
     except urllib.error.URLError as exc:
-        return {"ok": False, "error": f"Could not reach Ollama Cloud: {exc.reason}"}
+        return {"ok": False, "error": f"Could not reach the model API: {exc.reason}"}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Generation failed: {exc}"}
 
@@ -159,4 +198,5 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         configured = bool(os.getenv("OLLAMA_API_KEY", "").strip())
         self._send(200, {"ok": True, "default_model": DEFAULT_MODEL,
-                         "models": sorted(ALLOWED_MODELS), "key_configured": configured})
+                         "models": active_models(), "key_configured": configured,
+                         "gemini_configured": _gemini_configured(), "gemini_model": GEMINI_MODEL})
